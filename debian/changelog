@@ -1,5 +1,5 @@
-intel-vc-intrinsics (0+git20210816-1) UNRELEASED; urgency=medium
+intel-vc-intrinsics (0+git20210816-1) unstable; urgency=medium
 
   * Initial release (Closes: #992254)
 
- -- Timo Aaltonen <tjaalton@debian.org>  Mon, 16 Aug 2021 13:14:09 +0300
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 02 Sep 2021 20:41:23 +0300
