@@ -1,6 +1,7 @@
 intel-vc-intrinsics (0+git20210816-3) UNRELEASED; urgency=medium
 
   * rules: Check llvm version from build-deps.
+  * watch: Remove cruft.
 
  -- Timo Aaltonen <tjaalton@debian.org>  Wed, 17 Nov 2021 11:13:55 +0200
 
