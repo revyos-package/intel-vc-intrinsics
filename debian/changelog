@@ -1,5 +1,6 @@
-intel-vc-intrinsics (0+git20210816-3) UNRELEASED; urgency=medium
+intel-vc-intrinsics (0.1.0-1) UNRELEASED; urgency=medium
 
+  * New upstream release.
   * rules: Check llvm version from build-deps.
   * watch: Remove cruft.
 
