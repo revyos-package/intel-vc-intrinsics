@@ -6,18 +6,16 @@
 ;
 ;============================ end_copyright_notice =============================
 
-; XFAIL: llvm13
+; XFAIL: llvm13, llvm14, llvm15
 ; Test that reader treats only global pointer as svmptr type
 ; and ignores other address spaces.
 
 ; RUN: opt -S -GenXSPIRVReaderAdaptor < %s | FileCheck %s
 
 define spir_kernel void @test(i32* %ptr) #0 {
-; CHECK-LABEL: @test(
 
-; CHECK: i32*
-; CHECK: "VCArgumentKind"="0"
-; CHECK: [[PTR:%[^)]+]])
+; CHECK-LABEL: @test
+; CHECK-SAME: (i32* [[PTR:%[^)]+]])
 
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    ret void

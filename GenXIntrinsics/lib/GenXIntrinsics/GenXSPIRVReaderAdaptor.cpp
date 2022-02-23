@@ -22,8 +22,8 @@ SPDX-License-Identifier: MIT
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 
+#include "llvmVCWrapper/IR/Attributes.h"
 #include "llvmVCWrapper/IR/Function.h"
-#include "llvmVCWrapper/IR/GlobalValue.h"
 
 using namespace llvm;
 using namespace genx;
@@ -42,6 +42,18 @@ public:
 
 private:
   bool runOnFunction(Function &F);
+
+  bool processVCFunctionAttributes(Function &F);
+  bool processVCKernelAttributes(Function &F);
+
+  void dropAttributeAtIndex(Function &F, unsigned Index, StringRef Kind) {
+    auto NewAttributes = VCINTR::AttributeList::removeAttributeAtIndex(
+            F.getContext(), F.getAttributes(), Index, Kind);
+    F.setAttributes(NewAttributes);
+  }
+  void dropFnAttribute(Function &F, StringRef Kind) {
+    dropAttributeAtIndex(F, AttributeList::FunctionIndex, Kind);
+  }
 };
 
 } // namespace
@@ -66,8 +78,14 @@ static std::pair<SPIRVType, StringRef> parseImageDim(StringRef TyName) {
   if (TyName.consume_front(OCLTypes::Dim1dBuffer))
     return {SPIRVType::Image1dBuffer, TyName};
 
+  if (TyName.consume_front(OCLTypes::Dim1dArray))
+    return {SPIRVType::Image1dArray, TyName};
+
   if (TyName.consume_front(OCLTypes::Dim1d))
     return {SPIRVType::Image1d, TyName};
+
+  if (TyName.consume_front(OCLTypes::Dim2dArray))
+    return {SPIRVType::Image2dArray, TyName};
 
   if (TyName.consume_front(OCLTypes::Dim2d))
     return {SPIRVType::Image2d, TyName};
@@ -104,19 +122,112 @@ static SPIRVArgDesc parseImageType(StringRef TyName) {
   return {ImageType, AccType};
 }
 
-static Optional<SPIRVArgDesc> parseBufferType(StringRef TyName) {
+static std::pair<SPIRVType, StringRef> parseIntelMainType(StringRef TyName) {
+  if (TyName.consume_front(IntelTypes::Buffer))
+    return {SPIRVType::Buffer, TyName};
+
+  if (TyName.consume_front(IntelTypes::MediaBlockImage))
+    return {SPIRVType::Image2dMediaBlock, TyName};
+
+  llvm_unreachable("Unexpected intel extension type");
+}
+
+template <typename T> T consumeIntegerLiteral(StringRef TyName) {
+  int Literal;
+
+  auto ProperlyConsumed = !TyName.consumeInteger(0, Literal);
+  assert(ProperlyConsumed && "Expected string to rpresent integer literal");
+  (void)ProperlyConsumed;
+
+  return static_cast<T>(Literal);
+}
+
+static SPIRVType evaluateImageTypeFromSPVIR(SPIRVIRTypes::Dim Dim,
+                                            bool Arrayed) {
+  SPIRVType ResultType;
+  if (!Arrayed) {
+    switch (Dim) {
+    case SPIRVIRTypes::Dim1D:
+      ResultType = SPIRVType::Image1d;
+      break;
+    case SPIRVIRTypes::Dim2D:
+      ResultType = SPIRVType::Image2d;
+      break;
+    case SPIRVIRTypes::Dim3D:
+      ResultType = SPIRVType::Image3d;
+      break;
+    case SPIRVIRTypes::DimBuffer:
+      ResultType = SPIRVType::Image1dBuffer;
+      break;
+    default:
+      llvm_unreachable("Bad Image Type");
+    }
+  } else {
+    switch (Dim) {
+    case SPIRVIRTypes::Dim1D:
+      ResultType = SPIRVType::Image1dArray;
+      break;
+    case SPIRVIRTypes::Dim2D:
+      ResultType = SPIRVType::Image2dArray;
+      break;
+    default:
+      llvm_unreachable("Bad Image Type");
+    }
+  }
+
+  return ResultType;
+}
+
+static StringRef skipUnderscores(StringRef StrRef, int Count) {
+  for (int i = 0; i < Count; ++i) {
+    StrRef = StrRef.drop_while([](char C) { return C != '_'; });
+    StrRef = StrRef.drop_front(1);
+  }
+
+  return StrRef;
+}
+
+static SPIRVArgDesc parseSPIRVIRImageType(StringRef TyName) {
+  const bool Consumed = TyName.consume_front(SPIRVIRTypes::Image);
+  assert(Consumed && "Unexpected SPIRV friendly IR type");
+  (void)Consumed;
+
+  // SPIRV friendly Ir image type looks like this:
+  // spirv.Image._{Sampled T}_{Dim}_{Depth}_{Arrayed}_{MS}_{Fmt}_{Acc}
+
+  // skip Samled Type.
+  TyName = skipUnderscores(TyName, 2);
+
+  auto Dim = consumeIntegerLiteral<SPIRVIRTypes::Dim>(TyName);
+
+  // Skip Depth.
+  TyName = skipUnderscores(TyName, 2);
+
+  auto Arrayed = consumeIntegerLiteral<bool>(TyName);
+
+  // Skip Multisampling and Format.
+  TyName = skipUnderscores(TyName, 4);
+
+  AccessType AccessTy = AccessType::ReadOnly;
+
+  if (!TyName.empty())
+    AccessTy = consumeIntegerLiteral<AccessType>(TyName);
+
+  auto ResultType = evaluateImageTypeFromSPVIR(Dim, Arrayed);
+
+  return {ResultType, AccessTy};
+}
+
+static Optional<SPIRVArgDesc> parseIntelType(StringRef TyName) {
   if (!TyName.consume_front(IntelTypes::TypePrefix))
     return None;
 
-  if (!TyName.consume_front(IntelTypes::Buffer))
-    return None;
-
-  // Now assume that buffer type is correct.
+  SPIRVType MainType;
+  std::tie(MainType, TyName) = parseIntelMainType(TyName);
   AccessType AccType;
-  StringRef Suffix;
-  std::tie(AccType, Suffix) = parseAccessQualifier(TyName);
-  assert(Suffix == CommonTypes::TypeSuffix && "Bad buffer type");
-  return SPIRVArgDesc{SPIRVType::Buffer, AccType};
+  std::tie(AccType, TyName) = parseAccessQualifier(TyName);
+  assert(TyName == CommonTypes::TypeSuffix && "Bad intel type");
+  return SPIRVArgDesc{MainType, AccType};
 }
 
 static Optional<SPIRVArgDesc> parseOCLType(StringRef TyName) {
@@ -133,18 +244,35 @@ static Optional<SPIRVArgDesc> parseOCLType(StringRef TyName) {
   return parseImageType(TyName);
 }
 
+static Optional<SPIRVArgDesc> parseSPIRVIRType(StringRef TyName) {
+  if (!TyName.consume_front(SPIRVIRTypes::TypePrefix))
+    return None;
+
+  if (TyName.consume_front(SPIRVIRTypes::Sampler))
+    return {SPIRVType::Sampler};
+
+  return parseSPIRVIRImageType(TyName);
+}
 // Parse opaque type name.
-// Ty -> "opencl." OCLTy | "intel.buffer" Acc "_t"
+// Ty -> "opencl." OCLTy | "spirv." SPVIRTy | "intel" IntelTy
 // OCLTy -> "sampler_t" | ImageTy
+// IntelTy -> MainIntelTy Acc "_t"
+// MainIntelTy -> "buffer" | "image2d_media_block"
 // ImageTy -> "image" Dim Acc "_t"
 // Dim -> "1d" | "1d_buffer" | "2d" | "3d"
 // Acc -> "_ro" | "_wo" | "_rw"
-// Assume that "opencl." and "intel.buffer" types are well-formed.
+// SPVIRTy -> "Sampler" | SPVImageTy
+// SPVImageTy -> "Image." _..._{Dim}_..._{Arrayed}_..._{Acc}
+// Dim, Arrayed, Acc - literal operands matching OpTypeImage operands in SPIRV
+// Assume that "opencl." "spirv." and "intel.buffer" types are well-formed.
 static Optional<SPIRVArgDesc> parseOpaqueType(StringRef TyName) {
-  if (auto MaybeBuffer = parseBufferType(TyName))
-    return MaybeBuffer.getValue();
+  if (auto MaybeIntelTy = parseIntelType(TyName))
+    return MaybeIntelTy.getValue();
 
-  return parseOCLType(TyName);
+  if (auto MaybeOCL = parseOCLType(TyName))
+    return MaybeOCL.getValue();
+
+  return parseSPIRVIRType(TyName);
 }
 
 static SPIRVArgDesc analyzeKernelArg(const Argument &Arg) {
@@ -166,7 +294,7 @@ static SPIRVArgDesc analyzeKernelArg(const Argument &Arg) {
       AddressSpace != SPIRVParams::SPIRVConstantAS)
     return {SPIRVType::Other};
 
-  Type *PointeeTy = PointerTy->getElementType();
+  Type *PointeeTy = PointerTy->getPointerElementType();
   // Not a pointer to struct, cannot be sampler or image.
   if (!isa<StructType>(PointeeTy))
     return {SPIRVType::Pointer};
@@ -220,8 +348,11 @@ static ArgKind mapSPIRVTypeToArgKind(SPIRVType Ty) {
   switch (Ty) {
   case SPIRVType::Buffer:
   case SPIRVType::Image1d:
+  case SPIRVType::Image1dArray:
   case SPIRVType::Image1dBuffer:
   case SPIRVType::Image2d:
+  case SPIRVType::Image2dArray:
+  case SPIRVType::Image2dMediaBlock:
   case SPIRVType::Image3d:
     return ArgKind::Surface;
   case SPIRVType::Sampler:
@@ -244,11 +375,20 @@ static std::string mapSPIRVDescToArgDesc(SPIRVArgDesc SPIRVDesc) {
   case SPIRVType::Image1d:
     Desc += ArgDesc::Image1d;
     break;
+  case SPIRVType::Image1dArray:
+    Desc += ArgDesc::Image1dArray;
+    break;
   case SPIRVType::Image1dBuffer:
     Desc += ArgDesc::Image1dBuffer;
     break;
   case SPIRVType::Image2d:
     Desc += ArgDesc::Image2d;
+    break;
+  case SPIRVType::Image2dArray:
+    Desc += ArgDesc::Image2dArray;
+    break;
+  case SPIRVType::Image2dMediaBlock:
+    Desc += ArgDesc::Image2dMediaBlock;
     break;
   case SPIRVType::Image3d:
     Desc += ArgDesc::Image3d;
@@ -293,8 +433,7 @@ transformKernelSignature(Function &F, const std::vector<SPIRVArgDesc> &Descs) {
       [](Argument &Arg) { return getOriginalValue(Arg)->getType(); });
 
   auto *NewFTy = FunctionType::get(F.getReturnType(), NewTypes, false);
-  auto *NewF = VCINTR::Function::Create(
-      NewFTy, F.getLinkage(), VCINTR::GlobalValue::getAddressSpace(F));
+  auto *NewF = Function::Create(NewFTy, F.getLinkage(), F.getAddressSpace());
 
   // Copy function info.
   LLVMContext &Ctx = F.getContext();
@@ -320,6 +459,8 @@ transformKernelSignature(Function &F, const std::vector<SPIRVArgDesc> &Descs) {
     Attr = Attribute::get(Ctx, VCFunctionMD::VCArgumentDesc, ArgDesc);
     NewF->addParamAttr(i, Attr);
   }
+
+  legalizeParamAttributes(NewF);
 
   return NewF;
 }
@@ -377,7 +518,8 @@ static void rewriteKernelsTypes(Module &M) {
     // Skip things that are not VC kernels.
     if (F->getCallingConv() != CallingConv::SPIR_KERNEL)
       continue;
-    if (!F->getAttributes().hasFnAttribute(VCFunctionMD::VCFunction))
+    if (!VCINTR::AttributeList::hasFnAttr(F->getAttributes(),
+                                          VCFunctionMD::VCFunction))
       continue;
     rewriteKernelArguments(*F);
   }
@@ -409,61 +551,74 @@ bool GenXSPIRVReaderAdaptor::runOnModule(Module &M) {
   return true;
 }
 
-bool GenXSPIRVReaderAdaptor::runOnFunction(Function &F) {
+bool GenXSPIRVReaderAdaptor::processVCFunctionAttributes(Function &F) {
   auto Attrs = F.getAttributes();
-  if (!Attrs.hasFnAttribute(VCFunctionMD::VCFunction))
-    return true;
+  if (!VCINTR::AttributeList::hasFnAttr(Attrs, VCFunctionMD::VCFunction))
+    return false;
 
-  if (Attrs.hasFnAttribute(VCFunctionMD::VCStackCall)) {
+  dropFnAttribute(F, VCFunctionMD::VCFunction);
+
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, VCFunctionMD::VCStackCall)) {
     F.addFnAttr(FunctionMD::CMStackCall);
-    F.addFnAttr(Attribute::NoInline);
+    dropFnAttribute(F, VCFunctionMD::VCStackCall);
   }
 
-  if (Attrs.hasFnAttribute(VCFunctionMD::VCCallable)){
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, VCFunctionMD::VCCallable)) {
     F.addFnAttr(FunctionMD::CMCallable);
+    dropFnAttribute(F, VCFunctionMD::VCCallable);
   }
 
-  if (Attrs.hasFnAttribute(VCFunctionMD::VCFCEntry)) {
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, VCFunctionMD::VCFCEntry)) {
     F.addFnAttr(FunctionMD::CMEntry);
+    dropFnAttribute(F, VCFunctionMD::VCFCEntry);
   }
 
-  if (Attrs.hasFnAttribute(VCFunctionMD::VCSIMTCall)) {
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, VCFunctionMD::VCSIMTCall)) {
     auto SIMTMode = StringRef();
-    SIMTMode = Attrs
-                   .getAttribute(AttributeList::FunctionIndex,
-                                 VCFunctionMD::VCSIMTCall)
-                   .getValueAsString();
+    SIMTMode =
+        VCINTR::AttributeList::getAttributeAtIndex(
+            Attrs, AttributeList::FunctionIndex, VCFunctionMD::VCSIMTCall)
+            .getValueAsString();
     F.addFnAttr(FunctionMD::CMGenxSIMT, SIMTMode);
+    dropFnAttribute(F, VCFunctionMD::VCSIMTCall);
   }
 
   auto &&Context = F.getContext();
-  if (Attrs.hasFnAttribute(VCFunctionMD::VCFloatControl)) {
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, VCFunctionMD::VCFloatControl)) {
     auto FloatControl = unsigned(0);
-    Attrs
-        .getAttribute(AttributeList::FunctionIndex,
-                      VCFunctionMD::VCFloatControl)
+    VCINTR::AttributeList::getAttributeAtIndex(
+        Attrs, AttributeList::FunctionIndex, VCFunctionMD::VCFloatControl)
         .getValueAsString()
         .getAsInteger(0, FloatControl);
 
     auto Attr = Attribute::get(Context, FunctionMD::CMFloatControl,
                                std::to_string(FloatControl));
-    F.addAttribute(AttributeList::FunctionIndex, Attr);
+    VCINTR::Function::addAttributeAtIndex(F, AttributeList::FunctionIndex,
+                                          Attr);
+    dropFnAttribute(F, VCFunctionMD::VCFloatControl);
   }
 
   if (auto *ReqdSubgroupSize =
           F.getMetadata(SPIRVParams::SPIRVSIMDSubgroupSize)) {
     auto SIMDSize =
-        mdconst::dyn_extract<ConstantInt>(ReqdSubgroupSize->getOperand(0))
+        mdconst::extract<ConstantInt>(ReqdSubgroupSize->getOperand(0))
             ->getZExtValue();
     Attribute Attr = Attribute::get(Context, FunctionMD::OCLRuntime,
                                     std::to_string(SIMDSize));
-    F.addAttribute(AttributeList::FunctionIndex, Attr);
+    VCINTR::Function::addAttributeAtIndex(F, AttributeList::FunctionIndex,
+                                          Attr);
   }
+  return true;
+}
 
+bool GenXSPIRVReaderAdaptor::processVCKernelAttributes(Function &F) {
   if (!(F.getCallingConv() == CallingConv::SPIR_KERNEL))
-    return true;
+    return false;
+
   F.addFnAttr(FunctionMD::CMGenXMain);
   F.setDLLStorageClass(llvm::GlobalVariable::DLLExportStorageClass);
+
+  auto Attrs = F.getAttributes();
 
   auto *FunctionRef = ValueAsMetadata::get(&F);
   auto KernelName = F.getName();
@@ -472,40 +627,64 @@ bool GenXSPIRVReaderAdaptor::runOnFunction(Function &F) {
   auto ArgOffset = unsigned(0);
   auto ArgIOKinds = llvm::SmallVector<llvm::Metadata *, 8>();
   auto ArgDescs = llvm::SmallVector<llvm::Metadata *, 8>();
+  auto NBarrierCnt = unsigned(0);
 
+  auto &&Context = F.getContext();
   llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
-
-  if (Attrs.hasFnAttribute(VCFunctionMD::VCSLMSize)) {
-    Attrs.getAttribute(AttributeList::FunctionIndex, VCFunctionMD::VCSLMSize)
-        .getValueAsString()
-        .getAsInteger(0, SLMSize);
-  }
 
   for (Function::arg_iterator I = F.arg_begin(), E = F.arg_end(); I != E; ++I) {
     auto ArgNo = I->getArgNo();
     auto ArgKind = unsigned(0);
     auto ArgIOKind = unsigned(0);
     auto ArgDesc = std::string();
-    if (Attrs.hasAttribute(ArgNo + 1, VCFunctionMD::VCArgumentKind)) {
-      Attrs.getAttribute(ArgNo + 1, VCFunctionMD::VCArgumentKind)
+    auto AttrIndex = ArgNo + 1;
+
+    if (VCINTR::AttributeList::hasAttributeAtIndex(
+            Attrs, AttrIndex, VCFunctionMD::VCArgumentKind)) {
+      VCINTR::AttributeList::getAttributeAtIndex(Attrs, AttrIndex,
+                                                 VCFunctionMD::VCArgumentKind)
           .getValueAsString()
           .getAsInteger(0, ArgKind);
+      dropAttributeAtIndex(F, AttrIndex, VCFunctionMD::VCArgumentKind);
     }
-    if (Attrs.hasAttribute(ArgNo + 1, VCFunctionMD::VCArgumentIOKind)) {
-      Attrs.getAttribute(ArgNo + 1, VCFunctionMD::VCArgumentIOKind)
+    if (VCINTR::AttributeList::hasAttributeAtIndex(
+            Attrs, AttrIndex, VCFunctionMD::VCArgumentIOKind)) {
+      VCINTR::AttributeList::getAttributeAtIndex(Attrs, AttrIndex,
+                                                 VCFunctionMD::VCArgumentIOKind)
           .getValueAsString()
           .getAsInteger(0, ArgIOKind);
+      dropAttributeAtIndex(F, AttrIndex, VCFunctionMD::VCArgumentIOKind);
     }
-    if (Attrs.hasAttribute(ArgNo + 1, VCFunctionMD::VCArgumentDesc)) {
-      ArgDesc = Attrs.getAttribute(ArgNo + 1, VCFunctionMD::VCArgumentDesc)
+    if (VCINTR::AttributeList::hasAttributeAtIndex(
+            Attrs, AttrIndex, VCFunctionMD::VCArgumentDesc)) {
+      ArgDesc = VCINTR::AttributeList::getAttributeAtIndex(
+                    Attrs, AttrIndex, VCFunctionMD::VCArgumentDesc)
                     .getValueAsString()
                     .str();
+      dropAttributeAtIndex(F, AttrIndex, VCFunctionMD::VCArgumentDesc);
     }
     ArgKinds.push_back(
         llvm::ValueAsMetadata::get(llvm::ConstantInt::get(I32Ty, ArgKind)));
     ArgIOKinds.push_back(
         llvm::ValueAsMetadata::get(llvm::ConstantInt::get(I32Ty, ArgIOKind)));
     ArgDescs.push_back(llvm::MDString::get(Context, ArgDesc));
+  }
+
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, VCFunctionMD::VCSLMSize)) {
+    VCINTR::AttributeList::getAttributeAtIndex(
+        Attrs, AttributeList::FunctionIndex, VCFunctionMD::VCSLMSize)
+        .getValueAsString()
+        .getAsInteger(0, SLMSize);
+    dropFnAttribute(F, VCFunctionMD::VCSLMSize);
+  }
+
+  if (VCINTR::AttributeList::hasFnAttr(Attrs,
+                                       VCFunctionMD::VCNamedBarrierCount)) {
+    VCINTR::AttributeList::getAttributeAtIndex(
+        Attrs, AttributeList::FunctionIndex, VCFunctionMD::VCNamedBarrierCount)
+        .getValueAsString()
+        .getAsInteger(0, NBarrierCnt);
+    dropFnAttribute(F, VCFunctionMD::VCNamedBarrierCount);
   }
 
   auto KernelMD = std::vector<llvm::Metadata *>();
@@ -517,11 +696,20 @@ bool GenXSPIRVReaderAdaptor::runOnFunction(Function &F) {
       ConstantAsMetadata::get(ConstantInt::get(I32Ty, ArgOffset)));
   KernelMD.push_back(llvm::MDNode::get(Context, ArgIOKinds));
   KernelMD.push_back(llvm::MDNode::get(Context, ArgDescs));
-  KernelMD.push_back(ConstantAsMetadata::get(ConstantInt::get(I32Ty, 0)));
-
+  KernelMD.push_back(
+      ConstantAsMetadata::get(ConstantInt::get(I32Ty, NBarrierCnt)));
   NamedMDNode *KernelMDs =
       F.getParent()->getOrInsertNamedMetadata(FunctionMD::GenXKernels);
   llvm::MDNode *Node = MDNode::get(F.getContext(), KernelMD);
   KernelMDs->addOperand(Node);
+
+  return true;
+}
+
+bool GenXSPIRVReaderAdaptor::runOnFunction(Function &F) {
+  if (!processVCFunctionAttributes(F))
+    return true;
+
+  processVCKernelAttributes(F);
   return true;
 }

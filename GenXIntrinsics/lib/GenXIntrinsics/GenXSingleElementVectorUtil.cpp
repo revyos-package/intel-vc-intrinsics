@@ -22,9 +22,9 @@ SPDX-License-Identifier: MIT
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 
+#include "llvmVCWrapper/IR/Attributes.h"
 #include "llvmVCWrapper/IR/DerivedTypes.h"
 #include "llvmVCWrapper/IR/Function.h"
-#include "llvmVCWrapper/IR/GlobalValue.h"
 #include "llvmVCWrapper/IR/Instructions.h"
 #include "llvmVCWrapper/Support/Alignment.h"
 
@@ -91,7 +91,7 @@ static size_t getPointerNesting(Type *T, Type **ReturnNested = nullptr) {
   auto NPtrs = size_t{0};
   auto *NestedType = T;
   while (dyn_cast<PointerType>(NestedType)) {
-    NestedType = cast<PointerType>(NestedType)->getElementType();
+    NestedType = cast<PointerType>(NestedType)->getPointerElementType();
     ++NPtrs;
   }
   if (ReturnNested)
@@ -137,8 +137,8 @@ static size_t getInnerPointerVectorNesting(Type *T) {
 static Type *getTypeFreeFromSingleElementVector(Type *T) {
   // Pointer types should be "undressed" first
   if (auto *Ptr = dyn_cast<PointerType>(T)) {
-    auto UT = getTypeFreeFromSingleElementVector(Ptr->getElementType());
-    if (UT == Ptr->getElementType())
+    auto UT = getTypeFreeFromSingleElementVector(Ptr->getPointerElementType());
+    if (UT == Ptr->getPointerElementType())
       return Ptr;
     return PointerType::get(UT, Ptr->getAddressSpace());
   } else if (auto *VecTy = dyn_cast<VectorType>(T)) {
@@ -165,8 +165,8 @@ static Type *getTypeWithSingleElementVector(Type *T, size_t InnerPointers = 0) {
     return VCINTR::getVectorType(T, 1);
 
   auto *Ptr = cast<PointerType>(T);
-  auto *UT =
-      getTypeWithSingleElementVector(Ptr->getElementType(), InnerPointers);
+  auto *UT = getTypeWithSingleElementVector(Ptr->getPointerElementType(),
+                                            InnerPointers);
   return PointerType::get(UT, Ptr->getAddressSpace());
 }
 
@@ -387,7 +387,11 @@ static void replaceAllUsesWith(Function &OldF, Function &NewF) {
     }
 
     auto *NewCall = CallInst::Create(&NewF, NewParams, "", OldInst);
-    NewCall->setTailCall(OldInst->isTailCall());
+    NewCall->setCallingConv(OldInst->getCallingConv());
+    NewCall->setTailCallKind(OldInst->getTailCallKind());
+    NewCall->copyIRFlags(OldInst);
+    NewCall->copyMetadata(*OldInst);
+    NewCall->setAttributes(OldInst->getAttributes());
     replaceAllUsesWith(OldInst, NewCall);
   }
 }
@@ -460,10 +464,11 @@ static void manageSingleElementVectorAttribute(Function &NewF, Type *OldT,
     auto InnerPtrs = std::to_string(getInnerPointerVectorNesting(OldT));
     auto Attr = Attribute::get(NewF.getContext(),
                                VCModuleMD::VCSingleElementVector, InnerPtrs);
-    NewF.addAttribute(AttrNo, Attr);
+    VCINTR::Function::addAttributeAtIndex(NewF, AttrNo, Attr);
   } else if (hasSingleElementVector(NewT)) {
     assert(!hasSingleElementVector(OldT));
-    NewF.removeAttribute(AttrNo, VCModuleMD::VCSingleElementVector);
+    VCINTR::Function::removeAttributeAtIndex(NewF, AttrNo,
+                                             VCModuleMD::VCSingleElementVector);
   }
 }
 
@@ -492,11 +497,12 @@ static Type *getOriginalType(Function &F, size_t AttrNo) {
   auto *T =
       AttrNo == 0 ? FuncT->getReturnType() : FuncT->getParamType(AttrNo - 1);
   auto Attrs = F.getAttributes();
-  if (!Attrs.hasAttribute(AttrNo, VCModuleMD::VCSingleElementVector))
+  if (!VCINTR::AttributeList::hasAttributeAtIndex(
+          Attrs, AttrNo, VCModuleMD::VCSingleElementVector))
     return T;
-  auto InnerPtrsStr =
-      Attrs.getAttribute(AttrNo, VCModuleMD::VCSingleElementVector)
-          .getValueAsString();
+  auto InnerPtrsStr = VCINTR::AttributeList::getAttributeAtIndex(
+                          Attrs, AttrNo, VCModuleMD::VCSingleElementVector)
+                          .getValueAsString();
   auto InnerPtrs = InnerPtrsStr.empty() ? 0 : std::stoull(InnerPtrsStr.str());
   return getTypeWithSingleElementVector(T, InnerPtrs);
 }
@@ -529,8 +535,8 @@ static Function &getSingleElementVectorSignature(Function &F,
   if (NewFunctionType == F.getFunctionType())
     return F;
 
-  auto &&NewF = *VCINTR::Function::Create(
-      NewFunctionType, F.getLinkage(), VCINTR::GlobalValue::getAddressSpace(F));
+  auto &&NewF =
+      *Function::Create(NewFunctionType, F.getLinkage(), F.getAddressSpace());
 
   assert(doesSignatureHaveSingleElementVector(F) ||
          doesSignatureHaveSingleElementVector(NewF));
@@ -699,14 +705,12 @@ public:
                               OldInst.getOrdering(), OldInst.getSyncScopeID(),
                               &OldInst);
   }
-#if VC_INTR_LLVM_VERSION_MAJOR >= 8
   Instruction *visitUnaryOperator(UnaryOperator &OldInst) {
     auto *NewT = static_cast<llvm::Type *>(nullptr);
     auto NewVals = ValueCont{};
     std::tie(NewT, NewVals) = getOperandsFreeFromSingleElementVector(OldInst);
     return UnaryOperator::Create(OldInst.getOpcode(), NewVals[0], "", &OldInst);
   }
-#endif
   Instruction *visitVAArgInst(VAArgInst &OldInst) {
     auto *NewT = static_cast<llvm::Type *>(nullptr);
     auto NewVals = ValueCont{};
@@ -757,9 +761,9 @@ static void manageSingleElementVectorAttribute(GlobalVariable &GV, Type *OldT,
 static GlobalVariable &createAndTakeFrom(GlobalVariable &GV, PointerType *NewT,
                                          Constant *Initializer) {
   auto *NewGV = new GlobalVariable(
-      *GV.getParent(), NewT->getElementType(), GV.isConstant(), GV.getLinkage(),
-      Initializer, "sev.global.", &GV, GV.getThreadLocalMode(),
-      VCINTR::GlobalValue::getAddressSpace(GV), GV.isExternallyInitialized());
+      *GV.getParent(), NewT->getPointerElementType(), GV.isConstant(),
+      GV.getLinkage(), Initializer, "sev.global.", &GV, GV.getThreadLocalMode(),
+      GV.getAddressSpace(), GV.isExternallyInitialized());
   auto DebugInfoVec = SmallVector<DIGlobalVariableExpression *, 2>{};
   GV.getDebugInfo(DebugInfoVec);
   NewGV->takeName(&GV);
@@ -804,9 +808,9 @@ static void restoreGlobalVariable(GlobalVariable &GV) {
     return;
   auto *Initializer = static_cast<Constant *>(nullptr);
   if (GV.hasInitializer())
-    Initializer = cast<Constant>(
-        createScalarToVectorValue(GV.getInitializer(), NewT->getElementType(),
-                                  static_cast<Instruction *>(nullptr)));
+    Initializer = cast<Constant>(createScalarToVectorValue(
+        GV.getInitializer(), NewT->getPointerElementType(),
+        static_cast<Instruction *>(nullptr)));
   auto &&NewGV = createAndTakeFrom(GV, NewT, Initializer);
   while (GV.use_begin() != GV.use_end()) {
     auto &&Use = GV.use_begin();

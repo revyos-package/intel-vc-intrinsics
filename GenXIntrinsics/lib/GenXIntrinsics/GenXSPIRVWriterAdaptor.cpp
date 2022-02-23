@@ -24,9 +24,9 @@ SPDX-License-Identifier: MIT
 #include "llvm/Pass.h"
 #include "llvm/Support/Process.h"
 
+#include "llvmVCWrapper/IR/Attributes.h"
 #include "llvmVCWrapper/IR/DerivedTypes.h"
 #include "llvmVCWrapper/IR/Function.h"
-#include "llvmVCWrapper/IR/GlobalValue.h"
 
 using namespace llvm;
 using namespace genx;
@@ -112,11 +112,17 @@ static Type *getImageType(SPIRVArgDesc Desc, Module *M) {
   case SPIRVType::Image1d:
     Name += OCLTypes::Dim1d;
     break;
+  case SPIRVType::Image1dArray:
+    Name += OCLTypes::Dim1dArray;
+    break;
   case SPIRVType::Image1dBuffer:
     Name += OCLTypes::Dim1dBuffer;
     break;
   case SPIRVType::Image2d:
     Name += OCLTypes::Dim2d;
+    break;
+  case SPIRVType::Image2dArray:
+    Name += OCLTypes::Dim2dArray;
     break;
   case SPIRVType::Image3d:
     Name += OCLTypes::Dim3d;
@@ -130,15 +136,23 @@ static Type *getImageType(SPIRVArgDesc Desc, Module *M) {
   return getOpaquePtrType(M, Name, getOpaqueTypeAddressSpace(Desc.Ty));
 }
 
-// Get or create buffer type with given access qualifier.
-static Type *getBufferType(AccessType Acc, Module *M) {
+// Get or create vector compute extension type with given access qualifier.
+static Type *getIntelExtType(SPIRVArgDesc Desc, Module *M) {
   std::string Name = IntelTypes::TypePrefix;
-  Name += IntelTypes::Buffer;
+  switch (Desc.Ty) {
+  case SPIRVType::Buffer:
+    Name += IntelTypes::Buffer;
+    break;
+  case SPIRVType::Image2dMediaBlock:
+    Name += IntelTypes::MediaBlockImage;
+    break;
+  default:
+    llvm_unreachable("Unexpected spirv type for intel extensions");
+  }
 
-  addCommonTypesPostfix(Name, Acc);
+  addCommonTypesPostfix(Name, Desc.Acc);
 
-  return getOpaquePtrType(M, Name,
-                          getOpaqueTypeAddressSpace(SPIRVType::Buffer));
+  return getOpaquePtrType(M, Name, getOpaqueTypeAddressSpace(Desc.Ty));
 }
 
 // Sampler and surface arguments require opaque types that will be
@@ -148,7 +162,8 @@ static Type *getOpaqueType(SPIRVArgDesc Desc, Module *M) {
   case SPIRVType::Sampler:
     return getSamplerType(M);
   case SPIRVType::Buffer:
-    return getBufferType(Desc.Acc, M);
+  case SPIRVType::Image2dMediaBlock:
+    return getIntelExtType(Desc, M);
   default:
     return getImageType(Desc, M);
   }
@@ -181,8 +196,7 @@ transformKernelSignature(Function &F, const std::vector<SPIRVArgDesc> &Descs) {
 
   assert(!F.isVarArg() && "Kernel cannot be vararg");
   auto *NewFTy = FunctionType::get(F.getReturnType(), NewParams, false);
-  auto *NewF = VCINTR::Function::Create(
-      NewFTy, F.getLinkage(), VCINTR::GlobalValue::getAddressSpace(F));
+  auto *NewF = Function::Create(NewFTy, F.getLinkage(), F.getAddressSpace());
   NewF->copyAttributesFrom(&F);
   NewF->takeName(&F);
   NewF->copyMetadata(&F, 0);
@@ -196,6 +210,8 @@ transformKernelSignature(Function &F, const std::vector<SPIRVArgDesc> &Descs) {
     NewF->removeParamAttr(i, VCFunctionMD::VCArgumentKind);
     NewF->removeParamAttr(i, VCFunctionMD::VCArgumentDesc);
   }
+
+  legalizeParamAttributes(NewF);
 
   return NewF;
 }
@@ -215,6 +231,7 @@ static Instruction *rewriteArgumentUses(Argument &OldArg, Argument &NewArg) {
   Module *M = OldArg.getParent()->getParent();
   Function *ConvFn = GenXIntrinsic::getGenXDeclaration(
       M, GenXIntrinsic::genx_address_convert, {OldTy, NewTy});
+  ConvFn->addFnAttr(VCFunctionMD::VCFunction);
   auto *Conv = CallInst::Create(ConvFn, {&NewArg});
   OldArg.replaceAllUsesWith(Conv);
   return Conv;
@@ -237,8 +254,11 @@ static SPIRVArgDesc parseArgDesc(StringRef Desc) {
       Ty = StringSwitch<Optional<SPIRVType>>(Tok)
                .Case(ArgDesc::Buffer, SPIRVType::Buffer)
                .Case(ArgDesc::Image1d, SPIRVType::Image1d)
+               .Case(ArgDesc::Image1dArray, SPIRVType::Image1dArray)
                .Case(ArgDesc::Image1dBuffer, SPIRVType::Image1dBuffer)
                .Case(ArgDesc::Image2d, SPIRVType::Image2d)
+               .Case(ArgDesc::Image2dArray, SPIRVType::Image2dArray)
+               .Case(ArgDesc::Image2dMediaBlock, SPIRVType::Image2dMediaBlock)
                .Case(ArgDesc::Image3d, SPIRVType::Image3d)
                .Case(ArgDesc::SVM, SPIRVType::Pointer)
                .Case(ArgDesc::Sampler, SPIRVType::Sampler)
@@ -287,8 +307,11 @@ static SPIRVArgDesc analyzeSurfaceArg(StringRef Desc) {
   switch (SPVDesc.Ty) {
   case SPIRVType::Buffer:
   case SPIRVType::Image1d:
+  case SPIRVType::Image1dArray:
   case SPIRVType::Image1dBuffer:
   case SPIRVType::Image2d:
+  case SPIRVType::Image2dArray:
+  case SPIRVType::Image2dMediaBlock:
   case SPIRVType::Image3d:
     return SPVDesc;
   // CMRT does not require to annotate arguments.
@@ -444,12 +467,13 @@ bool GenXSPIRVWriterAdaptorImpl::run(Module &M) {
     }
   }
 
-  if (auto *MD = M.getNamedMetadata(FunctionMD::GenXKernels)) {
-    for (auto &&F : M)
+
+  for (auto &&F : M)
       runOnFunction(F);
-    // Old metadata is not needed anymore at this point.
+
+  // Old metadata is not needed anymore at this point.
+  if (auto *MD = M.getNamedMetadata(FunctionMD::GenXKernels))
     M.eraseNamedMetadata(MD);
-  }
 
   if (RewriteTypes)
     rewriteKernelsTypes(M);
@@ -466,45 +490,48 @@ bool GenXSPIRVWriterAdaptorImpl::runOnFunction(Function &F) {
   F.addFnAttr(VCFunctionMD::VCFunction);
 
   auto Attrs = F.getAttributes();
-  if (Attrs.hasFnAttribute(FunctionMD::CMStackCall)) {
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, FunctionMD::CMStackCall)) {
     F.addFnAttr(VCFunctionMD::VCStackCall);
   }
 
-  if (Attrs.hasFnAttribute(FunctionMD::CMCallable)) {
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, FunctionMD::CMCallable)) {
     F.addFnAttr(VCFunctionMD::VCCallable);
   }
 
-  if (Attrs.hasFnAttribute(FunctionMD::CMEntry)) {
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, FunctionMD::CMEntry)) {
     F.addFnAttr(VCFunctionMD::VCFCEntry);
   }
 
-  if (Attrs.hasFnAttribute(FunctionMD::CMGenxSIMT)) {
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, FunctionMD::CMGenxSIMT)) {
     auto SIMTMode = StringRef();
-    SIMTMode =
-        Attrs.getAttribute(AttributeList::FunctionIndex, FunctionMD::CMGenxSIMT)
-            .getValueAsString();
+    SIMTMode = VCINTR::AttributeList::getAttributeAtIndex(
+                   Attrs, AttributeList::FunctionIndex, FunctionMD::CMGenxSIMT)
+                   .getValueAsString();
     F.addFnAttr(VCFunctionMD::VCSIMTCall, SIMTMode);
   }
 
   auto &&Context = F.getContext();
-  if (Attrs.hasFnAttribute(FunctionMD::CMFloatControl)) {
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, FunctionMD::CMFloatControl)) {
     auto FloatControl = unsigned(0);
-    Attrs.getAttribute(AttributeList::FunctionIndex, FunctionMD::CMFloatControl)
+    VCINTR::AttributeList::getAttributeAtIndex(
+        Attrs, AttributeList::FunctionIndex, FunctionMD::CMFloatControl)
         .getValueAsString()
         .getAsInteger(0, FloatControl);
 
     auto Attr = Attribute::get(Context, VCFunctionMD::VCFloatControl,
                                std::to_string(FloatControl));
-    F.addAttribute(AttributeList::FunctionIndex, Attr);
+    VCINTR::Function::addAttributeAtIndex(F, AttributeList::FunctionIndex,
+                                          Attr);
   }
 
   auto *KernelMDs = F.getParent()->getNamedMetadata(FunctionMD::GenXKernels);
   if (!KernelMDs)
     return true;
 
-  if (Attrs.hasFnAttribute(FunctionMD::OCLRuntime)) {
+  if (VCINTR::AttributeList::hasFnAttr(Attrs, FunctionMD::OCLRuntime)) {
     auto SIMDSize = unsigned(0);
-    Attrs.getAttribute(AttributeList::FunctionIndex, FunctionMD::OCLRuntime)
+    VCINTR::AttributeList::getAttributeAtIndex(
+        Attrs, AttributeList::FunctionIndex, FunctionMD::OCLRuntime)
         .getValueAsString()
         .getAsInteger(0, SIMDSize);
     auto SizeMD = ConstantAsMetadata::get(
@@ -534,7 +561,7 @@ bool GenXSPIRVWriterAdaptorImpl::runOnFunction(Function &F) {
             auto ArgKind = V->getZExtValue();
             auto Attr = Attribute::get(Context, VCFunctionMD::VCArgumentKind,
                                        std::to_string(ArgKind));
-            F.addAttribute(ArgNo + 1, Attr);
+            VCINTR::Function::addAttributeAtIndex(F, ArgNo + 1, Attr);
           }
       }
     }
@@ -547,7 +574,8 @@ bool GenXSPIRVWriterAdaptorImpl::runOnFunction(Function &F) {
         auto SLMSize = V->getZExtValue();
         auto Attr = Attribute::get(Context, VCFunctionMD::VCSLMSize,
                                    std::to_string(SLMSize));
-        F.addAttribute(AttributeList::FunctionIndex, Attr);
+        VCINTR::Function::addAttributeAtIndex(F, AttributeList::FunctionIndex,
+                                              Attr);
       }
   }
 
@@ -561,7 +589,7 @@ bool GenXSPIRVWriterAdaptorImpl::runOnFunction(Function &F) {
             auto ArgKind = V->getZExtValue();
             auto Attr = Attribute::get(Context, VCFunctionMD::VCArgumentIOKind,
                                        std::to_string(ArgKind));
-            F.addAttribute(ArgNo + 1, Attr);
+            VCINTR::Function::addAttributeAtIndex(F, ArgNo + 1, Attr);
           }
       }
     }
@@ -576,10 +604,22 @@ bool GenXSPIRVWriterAdaptorImpl::runOnFunction(Function &F) {
           auto &&Desc = MS->getString();
           auto Attr =
               Attribute::get(Context, VCFunctionMD::VCArgumentDesc, Desc);
-          F.addAttribute(ArgNo + 1, Attr);
+          VCINTR::Function::addAttributeAtIndex(F, ArgNo + 1, Attr);
         }
       }
     }
+  }
+
+  if (KernelMD->getNumOperands() > KernelMDOp::NBarrierCnt) {
+    if (auto VM = dyn_cast<ValueAsMetadata>(
+            KernelMD->getOperand(KernelMDOp::NBarrierCnt)))
+      if (auto V = dyn_cast<ConstantInt>(VM->getValue())) {
+        auto NBarrierCnt = V->getZExtValue();
+        auto Attr = Attribute::get(Context, VCFunctionMD::VCNamedBarrierCount,
+                                   std::to_string(NBarrierCnt));
+        VCINTR::Function::addAttributeAtIndex(F, AttributeList::FunctionIndex,
+                                              Attr);
+      }
   }
 
   return true;
