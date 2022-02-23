@@ -3,6 +3,7 @@ intel-vc-intrinsics (0.1.0-1) UNRELEASED; urgency=medium
   * New upstream release.
   * rules: Check llvm version from build-deps.
   * watch: Updated.
+  * control: Bump policy to 4.6.0.
 
  -- Timo Aaltonen <tjaalton@debian.org>  Wed, 17 Nov 2021 11:13:55 +0200
 

@@ -7,7 +7,7 @@ Build-Depends: debhelper-compat (= 13),
  cmake,
  llvm-13-dev,
  zlib1g-dev,
-Standards-Version: 4.5.1
+Standards-Version: 4.6.0
 Homepage: https://github.com/intel/vc-intrinsics
 Vcs-Browser: https://salsa.debian.org/opencl-team/intel-vc-intrinsics
 Vcs-Git: https://salsa.debian.org/opencl-team/intel-vc-intrinsics.git
