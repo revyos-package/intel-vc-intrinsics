@@ -5,7 +5,7 @@ Maintainer: Debian OpenCL team <pkg-opencl-devel@lists.alioth.debian.org>
 Uploaders: Timo Aaltonen <tjaalton@debian.org>
 Build-Depends: debhelper-compat (= 13),
  cmake,
- llvm-13-dev,
+ llvm-12-dev,
  zlib1g-dev,
 Standards-Version: 4.6.0
 Homepage: https://github.com/intel/vc-intrinsics
