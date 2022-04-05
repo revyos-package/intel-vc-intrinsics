@@ -16,6 +16,13 @@ Rules-Requires-Root: no
 Package: intel-vc-intrinsics-dev
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Conflicts:
+ intel-vc-intrinsics-x.y-dev,
+Replaces:
+ intel-vc-intrinsics-x.y-dev,
+Provides:
+ intel-vc-intrinsics-12-dev,
+ intel-vc-intrinsics-x.y-dev,
 Description: Intel Vector Compute Intrinsics -- development files
  Vector Compute Intrinsics project contains a set of new intrinsics
  on top of core LLVM IR instructions that represent SIMD semantics of
