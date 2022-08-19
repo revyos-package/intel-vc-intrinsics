@@ -23,7 +23,7 @@ Conflicts:
 Replaces:
  intel-vc-intrinsics-x.y-dev,
 Provides:
- intel-vc-intrinsics-${llvm:Version}-dev,
+ intel-vc-intrinsics-${llvm:Version}-dev (= ${binary:Version}),
  intel-vc-intrinsics-x.y-dev,
 Description: Intel Vector Compute Intrinsics -- development files
  Vector Compute Intrinsics project contains a set of new intrinsics
