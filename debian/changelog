@@ -1,3 +1,9 @@
+intel-vc-intrinsics (0.5.0-3) unstable; urgency=medium
+
+  * Release to unstable.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 21 Sep 2022 12:09:34 +0300
+
 intel-vc-intrinsics (0.5.0-2) experimental; urgency=medium
 
   * Provide a versioned virtual package.
