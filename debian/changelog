@@ -1,3 +1,9 @@
+intel-vc-intrinsics (0.7.1-2) UNRELEASED; urgency=medium
+
+  * Mark as Multi-Arch: same.
+
+ -- Andreas Beckmann <anbe@debian.org>  Tue, 18 Oct 2022 10:53:47 +0200
+
 intel-vc-intrinsics (0.7.1-1) unstable; urgency=medium
 
   * New upstream release.
