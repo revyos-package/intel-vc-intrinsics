@@ -60,16 +60,14 @@ if(LLVM_VERSION_MAJOR VERSION_LESS 8)
   message(FATAL_ERROR "VC-intrinsics do not support ${LLVM_VERSION} LLVM version")
 endif()
 
-include(FindPythonInterp)
-if(NOT PYTHONINTERP_FOUND)
-  message(FATAL_ERROR
-"Unable to find Python interpreter, required for builds and testing.
-
-Please install Python or specify the PYTHON_EXECUTABLE CMake variable.")
-endif()
-
-if("${PYTHON_VERSION_STRING}" VERSION_LESS 2.7)
-  message(FATAL_ERROR "Python 2.7 or newer is required")
+if (DEFINED PYTHON_EXECUTABLE)
+  get_filename_component(PYTHON_EXECUTABLE "${PYTHON_EXECUTABLE}" ABSOLUTE)
+else()
+  find_package(Python REQUIRED COMPONENTS Interpreter)
+  if("${Python_VERSION}" VERSION_LESS 2.7)
+    message(FATAL_ERROR "Python 2.7 or newer is required")
+  endif()
+  set(PYTHON_EXECUTABLE "${Python_EXECUTABLE}")
 endif()
 
 
