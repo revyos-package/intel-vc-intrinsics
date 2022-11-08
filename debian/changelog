@@ -1,4 +1,4 @@
-intel-vc-intrinsics (0.8.1-1) UNRELEASED; urgency=medium
+intel-vc-intrinsics (0.8.1-1) unstable; urgency=medium
 
   [ Andreas Beckmann ]
   * Mark as Multi-Arch: same.
@@ -6,7 +6,7 @@ intel-vc-intrinsics (0.8.1-1) UNRELEASED; urgency=medium
   [ Timo Aaltonen ]
   * New upstream release.
 
- -- Andreas Beckmann <anbe@debian.org>  Tue, 18 Oct 2022 10:53:47 +0200
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 08 Nov 2022 12:47:10 +0200
 
 intel-vc-intrinsics (0.7.1-1) unstable; urgency=medium
 
