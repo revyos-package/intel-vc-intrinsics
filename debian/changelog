@@ -1,8 +1,8 @@
-intel-vc-intrinsics (0.11.0-1) UNRELEASED; urgency=medium
+intel-vc-intrinsics (0.11.0-1) unstable; urgency=medium
 
   * New upstream release.
 
- -- Timo Aaltonen <tjaalton@debian.org>  Tue, 24 Jan 2023 19:14:06 +0200
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 24 Jan 2023 19:25:18 +0200
 
 intel-vc-intrinsics (0.8.1-1) unstable; urgency=medium
 
