@@ -1,13 +1,13 @@
 ;=========================== begin_copyright_notice ============================
 ;
-; Copyright (C) 2020-2021 Intel Corporation
+; Copyright (C) 2020-2022 Intel Corporation
 ;
 ; SPDX-License-Identifier: MIT
 ;
 ;============================ end_copyright_notice =============================
 
-; XFAIL: llvm13, llvm14, llvm15, llvm16
-; RUN: opt -S -cmsimdcflowering < %s | FileCheck %s
+; XFAIL: llvm16
+; RUN: opt %pass%cmsimdcflowering -S < %s | FileCheck %s
 
 @Rcp_T2 = internal global <64 x double> undef
 

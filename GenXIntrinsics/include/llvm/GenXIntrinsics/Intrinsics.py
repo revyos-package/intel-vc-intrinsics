@@ -2,7 +2,7 @@
 
 # ========================== begin_copyright_notice ============================
 #
-# Copyright (C) 2019-2021 Intel Corporation
+# Copyright (C) 2019-2022 Intel Corporation
 #
 # SPDX-License-Identifier: MIT
 #
@@ -79,28 +79,15 @@ attribute_map = {
 # order does really matter.
 # It is used to define ordering between the respected platforms
 platform_list = [
-    "HSW",
-    "BDW",
-    "CHV",
-    "SKL",
-    "BXT",
-    "KBL",
-    "GLK",
-    "CNL",
-    "ICL",
-    "ICLLP",
-    "TGLLP",
-    "RKL",
-    "DG1",
-    "ADLP",
-    "ADLS",
-    "ADLN",
-    "XEHP",
-    "DG2",
-    "MTL",
-    "PVC",
-    "PVCXT_A0",
-    "PVCXT",
+    "Gen8",
+    "Gen9",
+    "Gen9LP",
+    "Gen11",
+    "XeLP",
+    "XeHP",
+    "XeHPG",
+    "XeLPG",
+    "XeHPC",
 ]
 
 def getAttributeList(Attrs):

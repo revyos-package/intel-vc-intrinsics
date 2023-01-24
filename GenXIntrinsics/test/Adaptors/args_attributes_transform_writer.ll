@@ -1,6 +1,6 @@
 ;=========================== begin_copyright_notice ============================
 ;
-; Copyright (C) 2021 Intel Corporation
+; Copyright (C) 2021-2022 Intel Corporation
 ;
 ; SPDX-License-Identifier: MIT
 ;
@@ -9,7 +9,7 @@
 ; Test that adaptor correctly handles parameter attributes with types.
 
 ; UNSUPPORTED: llvm8
-; RUN: opt -S -GenXSPIRVWriterAdaptor < %s | FileCheck %s
+; RUN: opt %pass%GenXSPIRVWriterAdaptor -S < %s | FileCheck %s
 ; CHECK: @test
 ; CHECK-SAME: i8
 ; CHECK-SAME: byval(i8)

@@ -1,16 +1,15 @@
 ;=========================== begin_copyright_notice ============================
 ;
-; Copyright (C) 2020-2021 Intel Corporation
+; Copyright (C) 2020-2022 Intel Corporation
 ;
 ; SPDX-License-Identifier: MIT
 ;
 ;============================ end_copyright_notice =============================
 
-; XFAIL: llvm13, llvm14, llvm15, llvm16
 ; Test that reader can cope with mixed mode when some
 ; arguments use address convert and some do not.
 
-; RUN: opt -S -GenXSPIRVReaderAdaptor < %s | FileCheck %s
+; RUN: opt %pass%GenXSPIRVReaderAdaptor -S < %s | FileCheck %s
 
 %intel.buffer_rw_t = type opaque
 %opencl.image1d_rw_t = type opaque

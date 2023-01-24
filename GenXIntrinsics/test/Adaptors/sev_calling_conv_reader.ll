@@ -9,8 +9,7 @@
 ; Test GenXSingleElementVectorUtil preserves calling convention
 ; (spir_func here)
 
-; XFAIL: llvm13, llvm14, llvm15, llvm16
-; RUN: opt -S -GenXSPIRVReaderAdaptor < %s | FileCheck %s
+; RUN: opt %pass%GenXSPIRVReaderAdaptor -S < %s | FileCheck %s
 
 
 ; ModuleID = 'start.ll'

@@ -1,15 +1,14 @@
 ;=========================== begin_copyright_notice ============================
 ;
-; Copyright (C) 2021 Intel Corporation
+; Copyright (C) 2021-2022 Intel Corporation
 ;
 ; SPDX-License-Identifier: MIT
 ;
 ;============================ end_copyright_notice =============================
 
-; XFAIL: llvm13, llvm14, llvm15, llvm16
 ; Test reader translation of image array arguments.
 
-; RUN: opt -S -GenXSPIRVReaderAdaptor < %s | FileCheck %s
+; RUN: opt %pass%GenXSPIRVReaderAdaptor -S < %s | FileCheck %s
 
 %opencl.image1d_array_ro_t = type opaque
 %opencl.image2d_array_wo_t = type opaque

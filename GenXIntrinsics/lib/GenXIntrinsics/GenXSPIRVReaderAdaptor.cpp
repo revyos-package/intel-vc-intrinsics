@@ -1,6 +1,6 @@
 /*========================== begin_copyright_notice ============================
 
-Copyright (C) 2020-2021 Intel Corporation
+Copyright (C) 2020-2022 Intel Corporation
 
 SPDX-License-Identifier: MIT
 
@@ -25,21 +25,18 @@ SPDX-License-Identifier: MIT
 
 #include "llvmVCWrapper/IR/Attributes.h"
 #include "llvmVCWrapper/IR/Function.h"
+#include "llvmVCWrapper/IR/Instructions.h"
+#include "llvmVCWrapper/IR/Type.h"
 
 using namespace llvm;
 using namespace genx;
 
 namespace {
 
-class GenXSPIRVReaderAdaptor final : public ModulePass {
+class GenXSPIRVReaderAdaptorImpl final {
 public:
-  static char ID;
-  explicit GenXSPIRVReaderAdaptor() : ModulePass(ID) {}
-  llvm::StringRef getPassName() const override {
-    return "GenX SPIRVReader Adaptor";
-  }
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-  bool runOnModule(Module &M) override;
+  explicit GenXSPIRVReaderAdaptorImpl() {}
+  bool run(Module &M);
 
 private:
   bool runOnFunction(Function &F);
@@ -58,21 +55,6 @@ private:
 };
 
 } // namespace
-
-char GenXSPIRVReaderAdaptor::ID = 0;
-
-INITIALIZE_PASS_BEGIN(GenXSPIRVReaderAdaptor, "GenXSPIRVReaderAdaptor",
-                      "GenXSPIRVReaderAdaptor", false, false)
-INITIALIZE_PASS_END(GenXSPIRVReaderAdaptor, "GenXSPIRVReaderAdaptor",
-                    "GenXSPIRVReaderAdaptor", false, false)
-
-ModulePass *llvm::createGenXSPIRVReaderAdaptorPass() {
-  return new GenXSPIRVReaderAdaptor();
-}
-
-void GenXSPIRVReaderAdaptor::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.setPreservesCFG();
-}
 
 static std::pair<SPIRVType, StringRef> parseImageDim(StringRef TyName) {
   // Greedy match: 1d_buffer first.
@@ -221,7 +203,7 @@ static SPIRVArgDesc parseSPIRVIRImageType(StringRef TyName) {
 
 static Optional<SPIRVArgDesc> parseIntelType(StringRef TyName) {
   if (!TyName.consume_front(IntelTypes::TypePrefix))
-    return None;
+    return {};
 
   SPIRVType MainType;
   std::tie(MainType, TyName) = parseIntelMainType(TyName);
@@ -233,7 +215,7 @@ static Optional<SPIRVArgDesc> parseIntelType(StringRef TyName) {
 
 static Optional<SPIRVArgDesc> parseOCLType(StringRef TyName) {
   if (!TyName.consume_front(OCLTypes::TypePrefix))
-    return None;
+    return {};
 
   // Sampler type.
   if (TyName.consume_front(OCLTypes::Sampler)) {
@@ -247,7 +229,7 @@ static Optional<SPIRVArgDesc> parseOCLType(StringRef TyName) {
 
 static Optional<SPIRVArgDesc> parseSPIRVIRType(StringRef TyName) {
   if (!TyName.consume_front(SPIRVIRTypes::TypePrefix))
-    return None;
+    return {};
 
   if (TyName.consume_front(SPIRVIRTypes::Sampler))
     return {SPIRVType::Sampler};
@@ -268,10 +250,10 @@ static Optional<SPIRVArgDesc> parseSPIRVIRType(StringRef TyName) {
 // Assume that "opencl." "spirv." and "intel.buffer" types are well-formed.
 static Optional<SPIRVArgDesc> parseOpaqueType(StringRef TyName) {
   if (auto MaybeIntelTy = parseIntelType(TyName))
-    return MaybeIntelTy.getValue();
+    return VCINTR::getValue(MaybeIntelTy);
 
   if (auto MaybeOCL = parseOCLType(TyName))
-    return MaybeOCL.getValue();
+    return VCINTR::getValue(MaybeOCL);
 
   return parseSPIRVIRType(TyName);
 }
@@ -295,7 +277,7 @@ static SPIRVArgDesc analyzeKernelArg(const Argument &Arg) {
       AddressSpace != SPIRVParams::SPIRVConstantAS)
     return {SPIRVType::Other};
 
-  Type *PointeeTy = PointerTy->getPointerElementType();
+  Type *PointeeTy = VCINTR::Type::getNonOpaquePtrEltTy(PointerTy);
   // Not a pointer to struct, cannot be sampler or image.
   if (!isa<StructType>(PointeeTy))
     return {SPIRVType::Pointer};
@@ -307,7 +289,7 @@ static SPIRVArgDesc analyzeKernelArg(const Argument &Arg) {
     return {SPIRVType::Pointer};
 
   if (auto MaybeDesc = parseOpaqueType(StrTy->getName())) {
-    SPIRVArgDesc Desc = MaybeDesc.getValue();
+    SPIRVArgDesc Desc = VCINTR::getValue(MaybeDesc);
     assert(getOpaqueTypeAddressSpace(Desc.Ty) == AddressSpace &&
            "Mismatching address space for type");
     return Desc;
@@ -425,8 +407,8 @@ static std::string mapSPIRVDescToArgDesc(SPIRVArgDesc SPIRVDesc) {
 static PointerType *getKernelArgPointerType(PointerType *ConvertTy,
                                             PointerType *ArgTy) {
   auto AddressSpace = ConvertTy->getPointerAddressSpace();
-  auto *ConvertPointeeTy = ConvertTy->getPointerElementType();
-  auto *ArgPointeeTy = ArgTy->getPointerElementType();
+  auto *ConvertPointeeTy = VCINTR::Type::getNonOpaquePtrEltTy(ConvertTy);
+  auto *ArgPointeeTy = VCINTR::Type::getNonOpaquePtrEltTy(ArgTy);
 
   if (ConvertPointeeTy->isAggregateType())
     return ConvertTy;
@@ -509,8 +491,11 @@ static void rewriteKernelArguments(Function &F) {
 
   Function *NewF = transformKernelSignature(F, ArgDescs);
   F.getParent()->getFunctionList().insert(F.getIterator(), NewF);
+#if VC_INTR_LLVM_VERSION_MAJOR > 15
+  NewF->splice(NewF->begin(), &F);
+#else
   NewF->getBasicBlockList().splice(NewF->begin(), F.getBasicBlockList());
-
+#endif
   // Rewrite uses and delete conversion intrinsics.
   for (int i = 0, e = ArgDescs.size(); i != e; ++i) {
     Argument &OldArg = *std::next(F.arg_begin(), i);
@@ -556,7 +541,7 @@ static void rewriteKernelsTypes(Module &M) {
   }
 }
 
-bool GenXSPIRVReaderAdaptor::runOnModule(Module &M) {
+bool GenXSPIRVReaderAdaptorImpl::run(Module &M) {
   auto *KernelMDs = M.getNamedMetadata(FunctionMD::GenXKernels);
   if (KernelMDs)
     return false;
@@ -582,7 +567,7 @@ bool GenXSPIRVReaderAdaptor::runOnModule(Module &M) {
   return true;
 }
 
-bool GenXSPIRVReaderAdaptor::processVCFunctionAttributes(Function &F) {
+bool GenXSPIRVReaderAdaptorImpl::processVCFunctionAttributes(Function &F) {
   auto Attrs = F.getAttributes();
   if (!VCINTR::AttributeList::hasFnAttr(Attrs, VCFunctionMD::VCFunction))
     return false;
@@ -642,7 +627,7 @@ bool GenXSPIRVReaderAdaptor::processVCFunctionAttributes(Function &F) {
   return true;
 }
 
-bool GenXSPIRVReaderAdaptor::processVCKernelAttributes(Function &F) {
+bool GenXSPIRVReaderAdaptorImpl::processVCKernelAttributes(Function &F) {
   if (!(F.getCallingConv() == CallingConv::SPIR_KERNEL))
     return false;
 
@@ -737,10 +722,64 @@ bool GenXSPIRVReaderAdaptor::processVCKernelAttributes(Function &F) {
   return true;
 }
 
-bool GenXSPIRVReaderAdaptor::runOnFunction(Function &F) {
+bool GenXSPIRVReaderAdaptorImpl::runOnFunction(Function &F) {
   if (!processVCFunctionAttributes(F))
     return true;
 
   processVCKernelAttributes(F);
   return true;
+}
+
+//-----------------------------------------------------------------------------
+// New PM support
+//-----------------------------------------------------------------------------
+PreservedAnalyses llvm::GenXSPIRVReaderAdaptor::run(Module &M,
+                                                    ModuleAnalysisManager &) {
+  GenXSPIRVReaderAdaptorImpl Impl;
+
+  if (!Impl.run(M))
+    return PreservedAnalyses::all();
+
+  PreservedAnalyses PA;
+  PA.preserveSet<CFGAnalyses>();
+  return PA;
+}
+
+//-----------------------------------------------------------------------------
+// Legacy PM support
+//-----------------------------------------------------------------------------
+namespace {
+class GenXSPIRVReaderAdaptorLegacy final : public ModulePass {
+public:
+  static char ID;
+
+public:
+  explicit GenXSPIRVReaderAdaptorLegacy() : ModulePass(ID) {}
+
+  llvm::StringRef getPassName() const override {
+    return GenXSPIRVReaderAdaptor::getArgString();
+  }
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
+  bool runOnModule(Module &M) override;
+}; // class GenXSPIRVReaderAdaptorLegacy
+
+} // namespace
+
+char GenXSPIRVReaderAdaptorLegacy::ID = 0;
+
+INITIALIZE_PASS(GenXSPIRVReaderAdaptorLegacy,
+                GenXSPIRVReaderAdaptor::getArgString(),
+                GenXSPIRVReaderAdaptor::getArgString(), false, false)
+
+ModulePass *llvm::createGenXSPIRVReaderAdaptorPass() {
+  return new GenXSPIRVReaderAdaptorLegacy();
+}
+
+void GenXSPIRVReaderAdaptorLegacy::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.setPreservesCFG();
+}
+
+bool GenXSPIRVReaderAdaptorLegacy::runOnModule(Module &M) {
+  GenXSPIRVReaderAdaptorImpl impl;
+  return impl.run(M);
 }

@@ -1,16 +1,15 @@
 ;=========================== begin_copyright_notice ============================
 ;
-; Copyright (C) 2020-2021 Intel Corporation
+; Copyright (C) 2020-2022 Intel Corporation
 ;
 ; SPDX-License-Identifier: MIT
 ;
 ;============================ end_copyright_notice =============================
 
-; XFAIL: llvm13, llvm14, llvm15, llvm16
 ; Test that reader treats only global pointer as svmptr type
 ; and ignores other address spaces.
 
-; RUN: opt -S -GenXSPIRVReaderAdaptor < %s | FileCheck %s
+; RUN: opt %pass%GenXSPIRVReaderAdaptor -S < %s | FileCheck %s
 
 define spir_kernel void @test(i32* %ptr) #0 {
 

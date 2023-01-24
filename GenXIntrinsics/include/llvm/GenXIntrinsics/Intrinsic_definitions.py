@@ -1,6 +1,6 @@
 # ========================== begin_copyright_notice ============================
 #
-# Copyright (C) 2019-2021 Intel Corporation
+# Copyright (C) 2019-2022 Intel Corporation
 #
 # SPDX-License-Identifier: MIT
 #
@@ -38,12 +38,12 @@
 # CPU can be any from "platforms" in Intrinsics.py or "ALL"
 # when field is absent - ALL by default
 # additional commands :
-# "CPU" = "-SKL" - unsupported since SKL
-# "CPU" = "KBL+" - supported from KBL
-# "CPU" = "~ICLLP" - unsupported on ICLLP
+# "CPU" = "-Gen9" - unsupported since Gen9
+# "CPU" = "Gen11+" - supported from Gen11
+# "CPU" = "~XeLP" - unsupported on XeLP
 # CPU can be list:
-# ["CNL+", "KBL"] - supported on KBL and all started from CNL
-# ["ALL", "~TGLLP"] - supported everyvere except TGLLP
+# ["XeLP+", "Gen9"] - supported on Gen9 and all started from XeLP
+# ["ALL", "~XeLP"] - supported everyvere except XeLP
 
 Imported_Intrinsics = \
 {
@@ -2012,7 +2012,7 @@ Imported_Intrinsics = \
 ###          for flat version Base Address + Offset[i] goes here
 ### * arg11: i32 surface to use for this operation. This can be an immediate or a register
 ###          for flat and bindless version pass zero here
-### * arg12: VXi{16,32,64} The data to merge disable channels (overloaded)
+### * arg12: The data to merge disable channels
 ###
 ### * Return value: the value read merged witg arg12 by predicate
 ###
@@ -2064,35 +2064,35 @@ Imported_Intrinsics = \
 ###   - 7 = :u16u32h (load 16b into high 16 of each 32b; store the high 16)
 ###
     "lsc_load_merge_slm" : { "result" : "anyvector",
-                             "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int"],
+                             "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int",0],
                              "attributes" : "ReadMem"
                            },
     "lsc_load_merge_stateless" : { "result" : "anyvector",
-                                   "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int"],
+                                   "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int",0],
                                     "attributes" : "ReadMem"
                                  },
     "lsc_load_merge_bindless" : { "result" : "anyvector",
-                                  "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int"],
+                                  "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int",0],
                                   "attributes" : "ReadMem"
                                 },
     "lsc_load_merge_bti" : { "result" : "anyvector",
-                             "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int"],
+                             "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int",0],
                              "attributes" : "ReadMem"
                            },
     "lsc_load_merge_quad_slm" : { "result" : "anyvector",
-                                  "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int"],
+                                  "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int",0],
                                   "attributes" : "ReadMem"
                                 },
     "lsc_load_merge_quad_stateless" : { "result" : "anyvector",
-                                        "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int"],
+                                        "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int",0],
                                         "attributes" : "ReadMem"
                                       },
     "lsc_load_merge_quad_bindless" : { "result" : "anyvector",
-                                       "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int"],
+                                       "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int",0],
                                        "attributes" : "ReadMem"
                                      },
     "lsc_load_merge_quad_bti" : { "result" : "anyvector",
-                                  "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int"],
+                                  "arguments" : ["any","char","char","char","short","int","char","char","char","char","any","int",0],
                                   "attributes" : "ReadMem"
                                 },
 

@@ -1,16 +1,16 @@
 ;=========================== begin_copyright_notice ============================
 ;
-; Copyright (C) 2020-2021 Intel Corporation
+; Copyright (C) 2020-2022 Intel Corporation
 ;
 ; SPDX-License-Identifier: MIT
 ;
 ;============================ end_copyright_notice =============================
 
-; XFAIL: llvm13, llvm14, llvm15, llvm16
 ; Test reader translation of implicit argument with argument kind
 ; decoration.
 
-; RUN: opt -S -GenXSPIRVReaderAdaptor < %s | FileCheck %s
+; XFAIL: llvm16
+; RUN: opt %pass%GenXSPIRVReaderAdaptor -S < %s | FileCheck %s
 
 define spir_kernel void @test(<3 x i32> "VCArgumentKind"="24" %__arg_llvm.genx.local.id) #0 {
 
