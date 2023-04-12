@@ -30,6 +30,8 @@ SPDX-License-Identifier: MIT
 #include "llvmVCWrapper/IR/Type.h"
 #include "llvmVCWrapper/Support/Alignment.h"
 
+#include <unordered_map>
+
 namespace llvm {
 namespace genx {
 /// This section contains some arbitrary constants
@@ -134,6 +136,9 @@ static size_t getInnerPointerVectorNesting(Type *T) {
 /// * Finalizing replacement of SEV-rich or SEV-free instruction with its
 ///   antipod
 
+static std::unordered_map<StructType*, StructType*> SEVFreeStructMap;
+static std::unordered_map<StructType*, StructType*> SEVRichStructMap;
+
 // Returns SEV-free analogue of Type T accordingly to the following scheme:
 // <1 x U>**...* ---> U**...*
 static Type *getTypeFreeFromSingleElementVector(Type *T) {
@@ -146,6 +151,44 @@ static Type *getTypeFreeFromSingleElementVector(Type *T) {
   } else if (auto *VecTy = dyn_cast<VectorType>(T)) {
     if (VCINTR::VectorType::getNumElements(VecTy) == 1)
       return VecTy->getElementType();
+  } else if (auto *StructTy = dyn_cast<StructType>(T)) {
+    // If there is a key for this struct type is in SEV-Free to SEV-Rich map it
+    // means that the type is already SEV-Free
+    if (SEVRichStructMap.find(StructTy) != SEVRichStructMap.end())
+      return T;
+    auto It = SEVFreeStructMap.find(StructTy);
+    if (It != SEVFreeStructMap.end())
+      return It->second;
+    // To handle circle dependencies we create opaque struct type and add it to
+    // the map. If this struct or any nested one contains a pointer to the type
+    // we are rewriting it will be automatically changed to this incomplete type
+    // and traversing will stop
+    StructType *NewStructTy = StructType::create(T->getContext());
+    It = SEVFreeStructMap.insert(std::make_pair(StructTy, NewStructTy)).first;
+    bool HasSEV = false;
+    std::vector<Type *> NewElements;
+    for (auto *ElemTy : StructTy->elements()) {
+      Type *NewElemTy = getTypeFreeFromSingleElementVector(ElemTy);
+      NewElements.push_back(NewElemTy);
+      if (!HasSEV && NewElemTy != ElemTy) {
+        // If new type is not equal to the old one it doesn't always mean that
+        // there is a SEV element in the struct. It could be also temporary
+        // unfininished (opaque) struct type or a pointer to it
+        auto *TempTy = NewElemTy;
+        while (auto *Ptr = dyn_cast<PointerType>(TempTy))
+          TempTy = VCINTR::Type::getNonOpaquePtrEltTy(Ptr);
+        if (auto *NestedStructTy = dyn_cast<StructType>(TempTy))
+          HasSEV = !NestedStructTy->isOpaque();
+        else
+          HasSEV = true;
+      }
+    }
+    if (HasSEV) {
+      NewStructTy->setBody(NewElements);
+      SEVRichStructMap.insert(std::make_pair(NewStructTy, StructTy));
+      return NewStructTy;
+    }
+    SEVFreeStructMap.erase(It);
   }
   return T;
 }
@@ -159,6 +202,10 @@ static Type *getTypeWithSingleElementVector(Type *T, size_t InnerPointers = 0) {
     assert(VCINTR::VectorType::getNumElements(VecTy) == 1 &&
            "Cannot put vector type inside another vector!");
     return T;
+  } else if (auto *StructTy = dyn_cast<StructType>(T)) {
+    auto It = SEVRichStructMap.find(StructTy);
+    assert(It != SEVRichStructMap.end());
+    return It->second;
   }
   auto NPtrs = getPointerNesting(T);
 
@@ -736,6 +783,18 @@ public:
     std::tie(NewT, NewVals) = getOperandsFreeFromSingleElementVector(OldInst);
     return ExtractValueInst::Create(NewVals[0], OldInst.getIndices(), "",
                                     &OldInst);
+  }
+  Instruction *visitGetElementPtrInst(GetElementPtrInst &OldInst) {
+    auto *NewT = static_cast<llvm::Type *>(nullptr);
+    auto NewVals = ValueCont{};
+    std::tie(NewT, NewVals) = getOperandsFreeFromSingleElementVector(OldInst);
+    std::vector<Value *> IdxList;
+    std::transform(NewVals.begin() + 1, NewVals.end(),
+                   std::back_inserter(IdxList), [](Value *V) { return V; });
+    auto *PointeeType = VCINTR::Type::getNonOpaquePtrEltTy(
+        cast<PointerType>(NewVals[0]->getType()->getScalarType()));
+    return GetElementPtrInst::Create(PointeeType, NewVals[0], IdxList, "",
+                                     &OldInst);
   }
   Instruction *visitExtractElementInst(ExtractElementInst &OldInst) {
     // No processing required
