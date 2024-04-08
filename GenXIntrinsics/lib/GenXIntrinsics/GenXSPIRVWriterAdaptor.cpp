@@ -1,6 +1,6 @@
 /*========================== begin_copyright_notice ============================
 
-Copyright (C) 2020-2023 Intel Corporation
+Copyright (C) 2020-2024 Intel Corporation
 
 SPDX-License-Identifier: MIT
 
@@ -356,11 +356,11 @@ static SPIRVArgDesc parseArgDesc(StringRef Desc) {
   Desc.split(Tokens, /*Separator=*/' ', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
 
   // Scan tokens until end or required info is found.
-  Optional<AccessType> AccTy;
-  Optional<SPIRVType> Ty;
+  VCINTR::Optional<AccessType> AccTy;
+  VCINTR::Optional<SPIRVType> Ty;
   for (StringRef Tok : Tokens) {
     if (!Ty) {
-      Ty = StringSwitch<Optional<SPIRVType>>(Tok)
+      Ty = StringSwitch<VCINTR::Optional<SPIRVType>>(Tok)
                .Case(ArgDesc::Buffer, SPIRVType::Buffer)
                .Case(ArgDesc::Image1d, SPIRVType::Image1d)
                .Case(ArgDesc::Image1dArray, SPIRVType::Image1dArray)
@@ -375,7 +375,7 @@ static SPIRVArgDesc parseArgDesc(StringRef Desc) {
     }
 
     if (!AccTy) {
-      AccTy = StringSwitch<Optional<AccessType>>(Tok)
+      AccTy = StringSwitch<VCINTR::Optional<AccessType>>(Tok)
                   .Case(ArgDesc::ReadOnly, AccessType::ReadOnly)
                   .Case(ArgDesc::WriteOnly, AccessType::WriteOnly)
                   .Case(ArgDesc::ReadWrite, AccessType::ReadWrite)
@@ -466,7 +466,7 @@ static SPIRVArgDesc analyzeArgumentAttributes(ArgKind Kind, StringRef Desc) {
 // value can be out of listed in ArgKind enum.
 // Such values are not processed later.
 // Return None if there is no such attribute.
-static Optional<ArgKind> extractArgumentKind(const Argument &Arg) {
+static VCINTR::Optional<ArgKind> extractArgumentKind(const Argument &Arg) {
   const Function *F = Arg.getParent();
   const AttributeList Attrs = F->getAttributes();
   if (!Attrs.hasParamAttr(Arg.getArgNo(), VCFunctionMD::VCArgumentKind))
@@ -539,9 +539,14 @@ static void rewriteKernelArguments(Function &F) {
 #endif
 
   Instruction *InsPt = &NewF->getEntryBlock().front();
-  for (auto ArgPair : llvm::zip(F.args(), NewF->args()))
+  for (auto &&ArgPair : llvm::zip(F.args(), NewF->args()))
     rewriteArgumentUses(InsPt, std::get<0>(ArgPair), std::get<1>(ArgPair));
 
+#if VC_INTR_LLVM_VERSION_MAJOR >= 17
+  // There might be module level named metadata referencing old function, so replace those usages with new function.
+  // This can be done safely (will not cause type mismatch) when only opaque pointers are used (since LLVM 17).
+  F.replaceAllUsesWith(NewF);
+#endif
   F.eraseFromParent();
 }
 
@@ -601,7 +606,7 @@ bool GenXSPIRVWriterAdaptorImpl::run(Module &M) {
     rewriteKernelsTypes(M);
 
   if (RewriteSingleElementVectors)
-    rewriteSingleElementVectors(M);
+    SEVUtil(M).rewriteSEVs();
 
 #if VC_INTR_LLVM_VERSION_MAJOR >= 16
   // ReadNone and ReadOnly is no more supported for intrinsics:

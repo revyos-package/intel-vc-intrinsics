@@ -1,6 +1,6 @@
 /*========================== begin_copyright_notice ============================
 
-Copyright (C) 2015-2022 Intel Corporation
+Copyright (C) 2015-2023 Intel Corporation
 
 SPDX-License-Identifier: MIT
 
@@ -1707,7 +1707,7 @@ void CMSimdCFLower::lowerSimdCF()
     }
     Value *Cond = Br->getCondition();
     Use *CondUse = getSimdConditionUse(Cond);
-    DebugLoc DL = Br->getDebugLoc();
+    const auto &DL = Br->getDebugLoc();
     if (CondUse)
       Cond = *CondUse;
     else {
@@ -1840,7 +1840,7 @@ void CMSimdCFLower::lowerUnmaskOps() {
     for (auto bi = BB->begin(), be = BB->end(); bi != be; ++bi) {
       Instruction *Inst = &*bi;
       // doing the work
-      if (auto CIE = dyn_cast_or_null<CallInst>(Inst)) {
+      if (auto *CIE = dyn_cast<CallInst>(Inst)) {
         if (GenXIntrinsic::getGenXIntrinsicID(CIE) ==
             GenXIntrinsic::genx_unmask_end) {
           auto LoadV = dyn_cast<LoadInst>(CIE->getArgOperand(0));
@@ -1863,7 +1863,7 @@ void CMSimdCFLower::lowerUnmaskOps() {
           MaskBegins.push_back(CIB);
           MaskEnds.push_back(CIE);
           // put in genx_simdcf_savemask and genx_simdcf_remask
-          auto DL = CIB->getDebugLoc();
+          const auto &DL = CIB->getDebugLoc();
           Instruction *OldEM =
               new LoadInst(VCINTR::Type::getNonOpaquePtrEltTy(EMVar->getType()), EMVar,
                            EMVar->getName(), false /* isVolatile */, CIB);
@@ -1887,19 +1887,19 @@ void CMSimdCFLower::lowerUnmaskOps() {
           (new StoreInst(Unmask, EMVar, false /* isVolatile */, CIB))
               ->setDebugLoc(DL);
           // put in genx_simdcf_remask
-          DL = CIE->getDebugLoc();
+          const auto &DLCIE = CIE->getDebugLoc();
           OldEM = new LoadInst(VCINTR::Type::getNonOpaquePtrEltTy(EMVar->getType()), EMVar,
                                EMVar->getName(), false /* isVolatile */, CIE);
-          OldEM->setDebugLoc(DL);
+          OldEM->setDebugLoc(DLCIE);
           Type *Ty2s[] = {OldEM->getType()};
           auto RemaskFunc = GenXIntrinsic::getGenXDeclaration(
                               BB->getParent()->getParent(),
                               GenXIntrinsic::genx_simdcf_remask, Ty2s);
           Value *Arg2s[] = {OldEM, LoadV};
           auto Remask = CallInst::Create(RemaskFunc, Arg2s, "remask", CIE);
-          Remask->setDebugLoc(DL);
+          Remask->setDebugLoc(DLCIE);
           (new StoreInst(Remask, EMVar, false /* isVolatile */, CIE))
-              ->setDebugLoc(DL);
+              ->setDebugLoc(DLCIE);
           updateFnAttr(SavemaskFunc);
           updateFnAttr(UnmaskFunc);
           updateFnAttr(RemaskFunc);
