@@ -1589,19 +1589,36 @@ Imported_Intrinsics = \
              },
 
 ### ``llvm.genx.dpas2.<return type>.<vector type>.<vector type>.<vector type>`` : dpas instruction (Dot Product Accumulate Systolic)
-### ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+### ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ###
 ### * arg0: accumulator first input value, vector integer/float type
 ### * arg1: src1 input value, vector integer/float type
 ### * arg2: src2 fourth input value, integer type
 ### * arg3: int information of src1 PresisionType
 ### * arg4: int information of src2 PresisionType
-### * arg5: int SystolicDepth
-### * arg6: int RepeatCount
+### * arg5: int SystolicDepth, must be a constant, the only supported value is 8
+### * arg6: int RepeatCount, must be a constant in range [1, 8]
 ### * arg7: int sign dst( 0 - unsigned, 1 sign)
 ### * arg8: int sign src0
 ###
 ### * Return value: result
+###
+### The src1 and src2 PrecisionType arguments should be enum values defined as follows:
+###
+### +---------------+-------+-------------------------------------------------+
+### | PrecisionType | Value | Description                                     |
+### +---------------+-------+-------------------------------------------------+
+### | S2            |    3  | 2-bit signed integer                            |
+### | U2            |    4  | 2-bit unsigned integer                          |
+### | S4            |    5  | 4-bit signed integer                            |
+### | U4            |    6  | 4-bit unsigned integer                          |
+### | S8            |    7  | 8-bit signed integer                            |
+### | U8            |    8  | 8-bit unsigned integer                          |
+### | BF16          |    9  | bfloat16 (S1E8M7) floating point                |
+### | HF16          |   10  | half-precision (S1E5M10) floating point         |
+### | TF32          |   12  | tensorfloat32 (S1E8M10) floating point          |
+### +---------------+-------+-------------------------------------------------+
+###
 ###
     "dpas2" : { "result" : "anyvector",
                 "arguments" : ["anyvector","anyvector","anyvector","int","int", "int", "int", "int", "int"],
@@ -2292,6 +2309,112 @@ Imported_Intrinsics = \
     "lsc_store2d_stateless" : { "result" : "void",
                                 "arguments" : ["anyvector","char","char","char","char","char","short","short","char","anyint","int","int","int","int","int","anyvector"],
                                 "attributes" : "None"
+                              },
+
+### ``llvm.genx.lsc.*.2d.ugm.desc.*`` : 2d block load/store/prefetch instructions
+### ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+###
+### * arg0: i1, Predicate
+### * arg1: vNi8, Cache controls, where N is the number of supported cache levels [MBC]
+### * arg2: i8, Number of blocks [MBC]
+### * arg3: i8, Block width (in elements) [MBC]
+### * arg4: i8, Block height [MBC]
+### * arg5: v16i32 Matrix descriptor [MBC]
+### * arg6: i32, Memory block X immediate offset (in elements) [MBC]
+### * arg7: i32, Memory block Y immediate offset [MBC]
+### * arg8: value to passthru when predicate is false on load,
+###         or value to write on store,
+###         or dummy value for prefetch to deduce the matrix element type
+###
+### * Return value: the value read or void
+###
+### The matrix descriptor is a 16-element vector that describes the 2D block layout in memory.
+### The descriptor layout is as follows:
+### desc[0]: low 32 bits of the base address
+### desc[1]: high 32 bits of the base address
+### desc[2]: matrix width in bytes, minus 1
+### desc[3]: matrix height, minus 1
+### desc[4]: matrix pitch in bytes, minus 1
+### desc[5]: block start X in elements, signed
+### desc[6]: block start Y in rows, signed
+### desc[7]: block size encoded as follows:
+###          (block_width - 1) | ((block_height - 1) << 8) | ((number_of_blocks - 1) << 16)
+### desc[8-15]: reserved
+###
+    "lsc_load_2d_ugm_desc" : { "result" : "anyvector",
+                               "arguments" : [
+                                   "bool",      # i1, predicate
+                                   "anyvector", # cache controls
+                                   "char",      # number of blocks
+                                   "short",     # block width
+                                   "short",     # block height
+                                   "int16",     # matrix descriptor
+                                   "int",       # X offset
+                                   "int",       # Y offset
+                                   0,           # value to passthru when predicate is false
+                                ],
+                                "attributes" : "ReadMem",
+                                "platforms" : "XeHPC+",
+                             },
+    "lsc_load_2d_ugm_desc_transpose" : { "result" : "anyvector",
+                                         "arguments" : [
+                                             "bool",      # i1, predicate
+                                             "anyvector", # cache controls
+                                             "char",      # number of blocks
+                                             "short",     # block width
+                                             "short",     # block height
+                                             "int16",     # matrix descriptor
+                                             "int",       # X offset
+                                             "int",       # Y offset
+                                             0,           # value to passthru when predicate is false
+                                          ],
+                                          "attributes" : "ReadMem",
+                                          "platforms" : "XeHPC+",
+                                       },
+    "lsc_load_2d_ugm_desc_vnni" : { "result" : "anyvector",
+                                    "arguments" : [
+                                        "bool",      # i1, predicate
+                                        "anyvector", # cache controls
+                                        "char",      # number of blocks
+                                        "short",     # block width
+                                        "short",     # block height
+                                        "int16",     # matrix descriptor
+                                        "int",       # X offset
+                                        "int",       # Y offset
+                                        0,           # value to passthru when predicate is false
+                                     ],
+                                     "attributes" : "ReadMem",
+                                     "platforms" : "XeHPC+",
+                                  },
+    "lsc_prefetch_2d_ugm_desc" : { "result" : "void",
+                                   "arguments" : [
+                                       "bool",      # i1, predicate
+                                       "anyvector", # cache controls
+                                       "char",      # number of blocks
+                                       "short",     # block width
+                                       "short",     # block height
+                                       "int16",     # matrix descriptor
+                                       "int",       # X offset
+                                       "int",       # Y offset
+                                       "anyvector", # dummy value, only element type is used
+                                    ],
+                                    "attributes" : "SideEffects",
+                                    "platforms" : "XeHPC+",
+                                 },
+    "lsc_store_2d_ugm_desc" : { "result" : "void",
+                                "arguments" : [
+                                    "bool",      # i1, predicate
+                                    "anyvector", # cache controls
+                                    "char",      # number of blocks
+                                    "short",     # block width
+                                    "short",     # block height
+                                    "int16",     # matrix descriptor
+                                    "int",       # X offset
+                                    "int",       # Y offset
+                                    "anyvector", # value to store
+                                 ],
+                                 "attributes" : "WriteMem",
+                                 "platforms" : "XeHPC+",
                               },
 
 ### ``llvm.genx.lsc.*.quad.typed.bti.<return type>.<predicate type>.<address type>``: LSC typed load/store/prefetch
@@ -4372,7 +4495,7 @@ Imported_Intrinsics = \
 ###
     "raw_send" : { "result" : "anyvector",
                    "arguments" : ["int","anyint","int","int","anyvector",0],
-                   "attributes" : "None"
+                   "attributes" : "SideEffects"
                  },
 
 ### ``llvm.genx.raw.send.noresult.<any int>.<vector type>`` : vISA RAW_SEND instruction with no result
@@ -4397,7 +4520,7 @@ Imported_Intrinsics = \
 ###
     "raw_send_noresult" : { "result" : "void",
                             "arguments" : ["int","anyint","int","int","anyvector"],
-                            "attributes" : "None"
+                            "attributes" : "SideEffects"
                           },
 
 ### ``llvm.genx.raw.sends.<return type>.<any int>.<vector type>.<vector type>`` : vISA RAW_SENDS instruction

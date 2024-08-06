@@ -138,9 +138,7 @@ inline bool isGenXIntrinsic(unsigned ID) {
 /// the function's name starts with "llvm.genx.".
 /// It's possible for this function to return true while getGenXIntrinsicID()
 /// returns GenXIntrinsic::not_genx_intrinsic!
-inline bool isGenXIntrinsic(const Function *CF) {
-  return CF->getName().startswith(getGenXIntrinsicPrefix());
-}
+bool isGenXIntrinsic(const Function *CF);
 
 /// GenXIntrinsic::isGenXIntrinsic(V) - Returns true if
 /// the function's name starts with "llvm.genx.".
