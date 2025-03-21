@@ -538,6 +538,20 @@ bool GenXIntrinsic::isOverloadedRet(unsigned IntrinID) {
 #undef GET_INTRINSIC_OVERLOAD_RET_TABLE
 }
 
+Function *GenXIntrinsic::getAnyDeclaration(Module *M, unsigned id,
+                                   ArrayRef<Type *> Tys) {
+  assert(isAnyNonTrivialIntrinsic(id));
+  if (isGenXIntrinsic(id)) {
+    return getGenXDeclaration(M, (ID)id, Tys);
+  } else {
+#if VC_INTR_LLVM_VERSION_MAJOR < 20
+    return Intrinsic::getDeclaration(M, (Intrinsic::ID)id, Tys);
+#else
+    return Intrinsic::getOrInsertDeclaration(M, (Intrinsic::ID)id, Tys);
+#endif
+  }
+}
+
 /// Find the segment of \c IntrinsicNameTable for intrinsics with the same
 /// target as \c Name, or the generic table if \c Name is not target specific.
 ///
@@ -599,9 +613,41 @@ std::string GenXIntrinsic::getGenXName(GenXIntrinsic::ID id,
   return Result;
 }
 
+static int lookupGenXIntrinsicByName(ArrayRef<const char *> NameTable,
+                                     StringRef Name) {
+#if VC_INTR_LLVM_VERSION_MAJOR < 20
+  return Intrinsic::lookupLLVMIntrinsicByName(NameTable, Name);
+#else // VC_INTR_LLVM_VERSION_MAJOR < 20
+  assert(Name.starts_with("llvm.genx.") && "Unexpected intrinsic prefix");
+  size_t CmpEnd = 4; // Skip the "llvm" component.
+  const char *const *Low = NameTable.begin();
+  const char *const *High = NameTable.end();
+  const char *const *LastLow = Low;
+  while (CmpEnd < Name.size() && High - Low > 0) {
+    size_t CmpStart = CmpEnd;
+    CmpEnd = Name.find('.', CmpStart + 1);
+    CmpEnd = CmpEnd == StringRef::npos ? Name.size() : CmpEnd;
+    auto Cmp = [CmpStart, CmpEnd](const char *LHS, const char *RHS) {
+      return strncmp(LHS + CmpStart, RHS + CmpStart, CmpEnd - CmpStart) < 0;
+    };
+    LastLow = Low;
+    std::tie(Low, High) = std::equal_range(Low, High, Name.data(), Cmp);
+  }
+  if (High - Low > 0)
+    LastLow = Low;
+  if (LastLow == NameTable.end())
+    return -1;
+  StringRef NameFound = *LastLow;
+  if (Name == NameFound ||
+      (Name.starts_with(NameFound) && Name[NameFound.size()] == '.'))
+    return LastLow - NameTable.begin();
+  return -1;
+#endif // VC_INTR_LLVM_VERSION_MAJOR < 20
+}
+
 GenXIntrinsic::ID GenXIntrinsic::lookupGenXIntrinsicID(StringRef Name) {
   ArrayRef<const char *> NameTable = findTargetSubtable(Name);
-  int Idx = Intrinsic::lookupLLVMIntrinsicByName(NameTable, Name);
+  int Idx = lookupGenXIntrinsicByName(NameTable, Name);
   if (Idx == -1)
     return GenXIntrinsic::not_genx_intrinsic;
 

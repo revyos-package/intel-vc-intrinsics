@@ -1845,6 +1845,22 @@ Imported_Intrinsics = \
                "attributes" : "NoMem"
              },
 
+### ``llvm.genx.biased.rounding.bf8.*`` : biased rounding instruction
+### ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+###
+### * arg0: input, vNf16
+### * arg1: bias, vNi8
+###
+### * Return value: result, vNi8
+###
+###
+    "biased_rounding_bf8" : { "result" : "anyint",
+                              "arguments" : ["anyvector", 0],
+                              "attributes" : "NoMem",
+                              "platforms" : "Xe3+"
+                            },
+
+
 ### bf_cvt
 ### ^^^^^^
 ###
@@ -1890,8 +1906,26 @@ Imported_Intrinsics = \
 ###
     "qf_cvt" : { "result" : "anyvector",
                  "arguments" : ["anyvector"],
-                 "attributes" : "NoMem"
+                 "attributes" : "NoMem",
+                 "platforms" : "Xe3+"
                },
+
+### hf8_cvt
+### ^^^^^^
+###
+### ``llvm.genx.hf8.cvt.<return type>.<vector type>`` : hf8_cvt instruction
+### ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+### * ``llvm.genx.hf8.cvt`` : hf8<->half conversion
+###
+### * arg0: first input, any scalar/vector i8/half type (overloaded)
+###
+### * Return value: result, must be i8 if arg0 is half, or half if arg0 is i8.
+###
+    "hf8_cvt" : { "result" : "anyvector",
+                  "arguments" : ["anyvector"],
+                  "attributes" : "NoMem",
+                  "platforms" : "Xe3+"
+                },
 
 ### ``llvm.genx.lsc.load.*.<return type if not void>.<any type>.<any type>`` : lsc_load instructions
 ### ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -2317,8 +2351,8 @@ Imported_Intrinsics = \
 ### * arg0: i1, Predicate
 ### * arg1: vNi8, Cache controls, where N is the number of supported cache levels [MBC]
 ### * arg2: i8, Number of blocks [MBC]
-### * arg3: i8, Block width (in elements) [MBC]
-### * arg4: i8, Block height [MBC]
+### * arg3: i16, Block width (in elements) [MBC]
+### * arg4: i16, Block height [MBC]
 ### * arg5: v16i32 Matrix descriptor
 ### * arg6: i32, Memory block X immediate offset (in elements) [MBC]
 ### * arg7: i32, Memory block Y immediate offset [MBC]

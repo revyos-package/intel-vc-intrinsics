@@ -1,6 +1,6 @@
 /*========================== begin_copyright_notice ============================
 
-Copyright (C) 2022 Intel Corporation
+Copyright (C) 2022-2024 Intel Corporation
 
 SPDX-License-Identifier: MIT
 
@@ -21,6 +21,16 @@ inline llvm::Type *getNonOpaquePtrEltTy(const llvm::Type *PTy) {
   return PTy->getNonOpaquePointerElementType();
 #else
   llvm_unreachable("Pointers no longer have element types");
+#endif
+}
+
+inline bool isOpaquePointerTy(const llvm::Type *Ty) {
+#if VC_INTR_LLVM_VERSION_MAJOR < 14
+  return false;
+#elif VC_INTR_LLVM_VERSION_MAJOR < 17
+  return Ty->isOpaquePointerTy();
+#else
+  return Ty->isPointerTy();
 #endif
 }
 
