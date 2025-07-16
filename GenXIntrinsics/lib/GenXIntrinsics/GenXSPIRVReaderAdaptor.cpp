@@ -113,9 +113,6 @@ static std::pair<SPIRVType, StringRef> parseIntelMainType(StringRef TyName) {
   if (TyName.consume_front(IntelTypes::Buffer))
     return {SPIRVType::Buffer, TyName};
 
-  if (TyName.consume_front(IntelTypes::MediaBlockImage))
-    return {SPIRVType::Image2dMediaBlock, TyName};
-
   llvm_unreachable("Unexpected intel extension type");
 }
 
@@ -290,10 +287,6 @@ static SPIRVArgDesc analyzeTargetExtTypeArg(const Argument &Arg,
       auto Acc =
           static_cast<AccessType>(TET->getIntParameter(SPIRVIRTypes::Access));
       auto SpvTy = evaluateImageTypeFromSPVIR(Dim, Arr);
-      if (SpvTy == SPIRVType::Image2d &&
-          Arg.getParent()->getAttributes().hasParamAttr(
-              Arg.getArgNo(), VCFunctionMD::VCMediaBlockIO))
-        SpvTy = SPIRVType::Image2dMediaBlock;
       return SPIRVArgDesc(SpvTy, Acc);
     }
     llvm_unreachable("Unexpected spirv target extension type");
@@ -387,7 +380,6 @@ static ArgKind mapSPIRVTypeToArgKind(SPIRVType Ty) {
   case SPIRVType::Image1dBuffer:
   case SPIRVType::Image2d:
   case SPIRVType::Image2dArray:
-  case SPIRVType::Image2dMediaBlock:
   case SPIRVType::Image3d:
     return ArgKind::Surface;
   case SPIRVType::Sampler:
@@ -401,7 +393,7 @@ static ArgKind mapSPIRVTypeToArgKind(SPIRVType Ty) {
   llvm_unreachable("Unexpected spirv type");
 }
 
-static std::string mapSPIRVDescToArgDesc(SPIRVArgDesc SPIRVDesc) {
+static std::string mapSPIRVDescToArgDesc(SPIRVArgDesc SPIRVDesc, bool IsMediaBlock) {
   std::string Desc;
   switch (SPIRVDesc.Ty) {
   case SPIRVType::Buffer:
@@ -417,13 +409,10 @@ static std::string mapSPIRVDescToArgDesc(SPIRVArgDesc SPIRVDesc) {
     Desc += ArgDesc::Image1dBuffer;
     break;
   case SPIRVType::Image2d:
-    Desc += ArgDesc::Image2d;
+    Desc += IsMediaBlock ? ArgDesc::Image2dMediaBlock : ArgDesc::Image2d;
     break;
   case SPIRVType::Image2dArray:
     Desc += ArgDesc::Image2dArray;
-    break;
-  case SPIRVType::Image2dMediaBlock:
-    Desc += ArgDesc::Image2dMediaBlock;
     break;
   case SPIRVType::Image3d:
     Desc += ArgDesc::Image3d;
@@ -477,13 +466,31 @@ transformKernelSignature(Function &F, const std::vector<SPIRVArgDesc> &Descs) {
   // Collect new kernel argument types.
   std::vector<Type *> NewTypes;
   std::transform(F.arg_begin(), F.arg_end(), std::back_inserter(NewTypes),
-                 [](Argument &Arg) {
-                   auto *Ty = getOriginalValue(Arg)->getType();
+                 [Descs](Argument &Arg) -> llvm::Type * {
+                   auto *Orig = getOriginalValue(Arg);
+                   auto *OrigTy = Orig->getType();
                    auto *ArgTy = Arg.getType();
-                   if (Ty->isPointerTy() && ArgTy->isPointerTy())
-                     Ty = getKernelArgPointerType(cast<PointerType>(Ty),
-                                                  cast<PointerType>(ArgTy));
-                   return Ty;
+                   if (isArgConvIntrinsic(Orig)) {
+#if VC_INTR_LLVM_VERSION_MAJOR > 15
+                     if (ArgTy->isTargetExtTy()) {
+                       // N.B. Target extension types are fully supported and tested
+                       // only with opaque pointers enabled.
+                       auto &Ctx = Arg.getContext();
+                       unsigned AddrSpace =
+                           getOpaqueTypeAddressSpace(Descs[Arg.getArgNo()].Ty);
+                       return PointerType::get(Type::getInt8Ty(Ctx), AddrSpace);
+                     }
+#endif
+                     if (!VCINTR::Type::isOpaquePointerTy(ArgTy) &&
+                         Arg.hasByValAttr())
+                       return OrigTy;
+
+                     return ArgTy;
+                   }
+                   if (OrigTy->isPointerTy() && ArgTy->isPointerTy())
+                     return getKernelArgPointerType(cast<PointerType>(OrigTy),
+                                                    cast<PointerType>(ArgTy));
+                   return OrigTy;
                  });
 
   auto *NewFTy = FunctionType::get(F.getReturnType(), NewTypes, false);
@@ -506,7 +513,9 @@ transformKernelSignature(Function &F, const std::vector<SPIRVArgDesc> &Descs) {
 
     // Add needed attributes to newly created function argument.
     ArgKind AK = mapSPIRVTypeToArgKind(SPVDesc.Ty);
-    ArgDesc = mapSPIRVDescToArgDesc(SPVDesc);
+    ArgDesc = mapSPIRVDescToArgDesc(
+        SPVDesc,
+        F.getAttributes().hasParamAttr(i, VCFunctionMD::VCMediaBlockIO));
     Attribute Attr = Attribute::get(Ctx, VCFunctionMD::VCArgumentKind,
                                     std::to_string(static_cast<unsigned>(AK)));
     NewF->addParamAttr(i, Attr);
@@ -584,7 +593,10 @@ static void rewriteKernelArguments(Function &F) {
 
     if (isa<Instruction>(Orig) && OrigTy != NewTy) {
       IRBuilder<> Builder(cast<Instruction>(Orig));
-      NewVal = Builder.CreatePointerBitCastOrAddrSpaceCast(NewVal, OrigTy);
+      if (OrigTy->isIntegerTy())
+        NewVal = Builder.CreatePtrToInt(NewVal, OrigTy);
+      else
+        NewVal = Builder.CreatePointerBitCastOrAddrSpaceCast(NewVal, OrigTy);
     }
 
     Orig->replaceAllUsesWith(NewVal);
@@ -754,6 +766,9 @@ bool GenXSPIRVReaderAdaptorImpl::processVCKernelAttributes(Function &F) {
                     .str();
       dropAttributeAtIndex(F, AttrIndex, VCFunctionMD::VCArgumentDesc);
     }
+    if (VCINTR::AttributeList::hasAttributeAtIndex(
+            Attrs, AttrIndex, VCFunctionMD::VCMediaBlockIO))
+      dropAttributeAtIndex(F, AttrIndex, VCFunctionMD::VCMediaBlockIO);
     ArgKinds.push_back(
         llvm::ValueAsMetadata::get(llvm::ConstantInt::get(I32Ty, ArgKind)));
     ArgIOKinds.push_back(
