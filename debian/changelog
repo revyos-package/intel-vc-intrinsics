@@ -1,3 +1,9 @@
+intel-vc-intrinsics (0.23.1-0revyos1) unstable; urgency=medium
+
+  * New upstream version 0.23.1
+
+ -- Han Gao <rabenda.cn@gmail.com>  Wed, 16 Jul 2025 22:58:55 +0800
+
 intel-vc-intrinsics (0.22.1-1) unstable; urgency=medium
 
   * New upstream release.
