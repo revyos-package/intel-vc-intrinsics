@@ -1,6 +1,6 @@
 /*========================== begin_copyright_notice ============================
 
-Copyright (C) 2020-2024 Intel Corporation
+Copyright (C) 2020-2025 Intel Corporation
 
 SPDX-License-Identifier: MIT
 
@@ -149,9 +149,6 @@ static Type *getIntelExtType(SPIRVArgDesc Desc, Module *M) {
   case SPIRVType::Buffer:
     Name += IntelTypes::Buffer;
     break;
-  case SPIRVType::Image2dMediaBlock:
-    Name += IntelTypes::MediaBlockImage;
-    break;
   default:
     llvm_unreachable("Unexpected spirv type for intel extensions");
   }
@@ -168,7 +165,6 @@ static Type *getOpaqueType(SPIRVArgDesc Desc, Module *M) {
   case SPIRVType::Sampler:
     return getSamplerType(M);
   case SPIRVType::Buffer:
-  case SPIRVType::Image2dMediaBlock:
     return getIntelExtType(Desc, M);
   default:
     return getImageType(Desc, M);
@@ -248,11 +244,17 @@ static Type *getArgTargetTypeFromDesc(SPIRVArgDesc Desc, Argument &Arg) {
     return Arg.getType();
   case SPIRVType::Buffer:
     return TargetExtType::get(Ctx, NamePrefix + SPIRVIRTypes::Buffer, {}, Acc);
-  case SPIRVType::Image2dMediaBlock:
-    return getImageTargetType(SPIRVArgDesc(SPIRVType::Image2d, Desc.Acc), Arg);
   }
 }
 #endif // VC_INTR_LLVM_VERSION_MAJOR >= 16
+
+// Extract string desc from VCArgumentDesc attribute.
+static StringRef extractArgumentDesc(const Argument &Arg) {
+  const Function *F = Arg.getParent();
+  const AttributeList Attrs = F->getAttributes();
+  return Attrs.getParamAttr(Arg.getArgNo(), VCFunctionMD::VCArgumentDesc)
+      .getValueAsString();
+}
 
 static Function *
 transformKernelSignature(Function &F, const std::vector<SPIRVArgDesc> &Descs) {
@@ -286,18 +288,18 @@ transformKernelSignature(Function &F, const std::vector<SPIRVArgDesc> &Descs) {
   NewF->copyMetadata(&F, 0);
   NewF->setComdat(F.getComdat());
 
-  // Remove no more needed attributes.
+  // Remove no more needed attributes and add media block attr if necessary.
   for (int i = 0, e = Descs.size(); i != e; ++i) {
     if (Descs[i].Ty == SPIRVType::None)
       continue;
-#if VC_INTR_LLVM_VERSION_MAJOR >= 16
-    if (UseTargetTypes && Descs[i].Ty == SPIRVType::Image2dMediaBlock) {
-      AttrBuilder AttrBuilder(NewF->getContext());
-      AttrBuilder.addAttribute(VCFunctionMD::VCMediaBlockIO);
-      NewF->addParamAttrs(i, AttrBuilder);
+    if (Descs[i].Ty == SPIRVType::Image2d &&
+        VCINTR::StringRef::starts_with(extractArgumentDesc(*F.getArg(i)),
+                                       ArgDesc::Image2dMediaBlock)) {
+      auto Attr =
+          Attribute::get(NewF->getContext(), VCFunctionMD::VCMediaBlockIO);
+      VCINTR::Function::addAttributeAtIndex(
+          *NewF, AttributeList::FirstArgIndex + i, Attr);
     }
-#endif // VC_INTR_LLVM_VERSION_MAJOR >= 16
-
     NewF->removeParamAttr(i, VCFunctionMD::VCArgumentKind);
     NewF->removeParamAttr(i, VCFunctionMD::VCArgumentDesc);
   }
@@ -339,7 +341,7 @@ static void rewriteArgumentUses(Instruction *InsertBefore, Argument &OldArg,
     }
   } else if (OldTy->isPointerTy() && NewTy->isIntegerTy()) {
     Cast = Builder.CreateIntToPtr(&NewArg, OldTy);
-  } else if (OldTy->isIntegerTy() && NewTy->isPointerTy()) {
+  } else if (OldTy->isIntegerTy(64) && NewTy->isPointerTy()) {
     Cast = Builder.CreatePtrToInt(&NewArg, OldTy);
   } else {
     auto *M = OldArg.getParent()->getParent();
@@ -374,7 +376,7 @@ static SPIRVArgDesc parseArgDesc(StringRef Desc) {
                .Case(ArgDesc::Image1dBuffer, SPIRVType::Image1dBuffer)
                .Case(ArgDesc::Image2d, SPIRVType::Image2d)
                .Case(ArgDesc::Image2dArray, SPIRVType::Image2dArray)
-               .Case(ArgDesc::Image2dMediaBlock, SPIRVType::Image2dMediaBlock)
+               .Case(ArgDesc::Image2dMediaBlock, SPIRVType::Image2d)
                .Case(ArgDesc::Image3d, SPIRVType::Image3d)
                .Case(ArgDesc::SVM, SPIRVType::Pointer)
                .Case(ArgDesc::Sampler, SPIRVType::Sampler)
@@ -427,7 +429,6 @@ static SPIRVArgDesc analyzeSurfaceArg(StringRef Desc) {
   case SPIRVType::Image1dBuffer:
   case SPIRVType::Image2d:
   case SPIRVType::Image2dArray:
-  case SPIRVType::Image2dMediaBlock:
   case SPIRVType::Image3d:
     return SPVDesc;
   // CMRT does not require to annotate arguments.
@@ -486,14 +487,6 @@ static VCINTR::Optional<ArgKind> extractArgumentKind(const Argument &Arg) {
   assert(!Conv && "Expected integer value as arg kind");
   // TODO: add some sanity check that the value can be casted to ArgKind
   return static_cast<ArgKind>(AttrVal);
-}
-
-// Extract string desc from VCArgumentDesc attribute.
-static StringRef extractArgumentDesc(const Argument &Arg) {
-  const Function *F = Arg.getParent();
-  const AttributeList Attrs = F->getAttributes();
-  return Attrs.getParamAttr(Arg.getArgNo(), VCFunctionMD::VCArgumentDesc)
-      .getValueAsString();
 }
 
 // Get SPIRV type and access qualifier of kernel argument
@@ -583,6 +576,15 @@ static inline void FixAttributes(Function &F, Attribute::AttrKind Attr,
 #endif
 
 bool GenXSPIRVWriterAdaptorImpl::run(Module &M) {
+#if VC_INTR_LLVM_VERSION_MAJOR >= 21
+  auto TargetTriple = StringRef(M.getTargetTriple().str());
+  if (VCINTR::StringRef::starts_with(TargetTriple, "genx")) {
+    if (VCINTR::StringRef::starts_with(TargetTriple, "genx32"))
+      M.setTargetTriple(Triple("spir"));
+    else
+      M.setTargetTriple(Triple("spir64"));
+  }
+#else
   auto TargetTriple = StringRef(M.getTargetTriple());
   if (VCINTR::StringRef::starts_with(TargetTriple, "genx")) {
     if (VCINTR::StringRef::starts_with(TargetTriple, "genx32"))
@@ -590,6 +592,7 @@ bool GenXSPIRVWriterAdaptorImpl::run(Module &M) {
     else
       M.setTargetTriple("spir64");
   }
+#endif
 
   for (auto &&GV : M.globals()) {
     GV.addAttribute(VCModuleMD::VCGlobalVariable);
