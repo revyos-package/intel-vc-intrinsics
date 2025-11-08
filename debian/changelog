@@ -1,3 +1,10 @@
+intel-vc-intrinsics (0.23.4-0revyos1) unstable; urgency=medium
+
+  * New upstream version 0.23.4
+  * Use llvm 16
+
+ -- Han Gao <rabenda.cn@gmail.com>  Sat, 08 Nov 2025 22:23:05 +0800
+
 intel-vc-intrinsics (0.23.1-0revyos1) unstable; urgency=medium
 
   * New upstream version 0.23.1
